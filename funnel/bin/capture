@@ -1,0 +1,7 @@
+#!/bin/bash
+# Extract typed candidate facts from prose staging notes into candidates/.
+# The extractor is pluggable: set MEMORY_EXTRACTOR_CMD (see docs/judges.md).
+# Usage: capture <note.md> [<note2.md> ...]
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+exec python3 "$ROOT/capture.py" "$@"

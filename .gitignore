@@ -1,0 +1,42 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Local data: never commit live memory
+/staging/
+funnel/candidates/
+funnel/review/
+funnel/done/
+funnel/rejected/
+funnel/processing/
+funnel/ledger/
+funnel/registry.yaml
+funnel/policy.yaml
+funnel/.mutation.lock
+router/out/
+router-index.md
+router-map.json
+router-lint.md
+.DS_Store
+
+# Runtime state and outputs: never commit (use a private MEMORY_ROOT outside the clone)
+funnel/archive/
+funnel/router/
+funnel/ledger/
+funnel/staging/
+funnel/.notify-pending/
+funnel/*.log
+*.capture-state.json
+*.jsonl
+router/.dirty
+/vault/_outputs/*
+!/vault/_outputs/.gitkeep

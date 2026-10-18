@@ -1,0 +1,12 @@
+# Fact template. One file per proposed fact. Save as <short-id>.yaml in funnel/candidates/
+# (or in staging, for a person to review). Every field below is required.
+fact: One explicit, durable statement that stands on its own.
+type: workflow            # preference | decision | workflow | boundary | tool | project_fact
+scope: client:example     # personal | org | client:<slug> | project:<slug>
+source:
+  kind: note              # where the evidence lives
+  path: /absolute/path/to/the/source-note.md
+  excerpt: The exact sentence from the source that supports the fact.
+observed_at: 2026-01-01   # date the source was written or the fact was seen
+target_note: 03-resources/agent-systems/captured-client-example.md   # vault relative
+risk: low                 # only low risk can be promoted without a person

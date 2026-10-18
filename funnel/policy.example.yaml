@@ -1,0 +1,96 @@
+# Consensus-promoted memory: example policy. Copy to policy.yaml (or point MEMORY_POLICY at it).
+# Autonomous promotion is memory HYGIENE, not judgement: it files explicit, sourced,
+# low-risk facts. It never decides what is "important" about a life, client, or business.
+#
+# Doctrine: default-open autonomy. A human reviews only a genuine agent deadlock.
+# Sensitivity gets MORE agents (tags + notify), not a human. Act-and-notify with undo.
+
+# Trusted vault. Relative paths resolve from the kit root. VAULT_ROOT env wins.
+vault_root: ./vault
+
+# Types that may auto-promote after judges (plus review_types, which use a stricter
+# unanimity + notify path, so they are NOT silent and do NOT park solely for type).
+allowed_types: [preference, decision, workflow, tool, project_fact]
+# review_types: never silent. Boundary facts always run the third judge and require
+# three judges: 3 promote → promote AND append notify-feed; 3 reject → reject
+# (judges-rejected, recoverable); anything else → park reason deadlock (the only
+# judge-driven park). Two-vote rejection never applies to boundary.
+review_types: [boundary]
+
+# Scope must start with one of these. 'client:' / 'project:' require a named entity.
+allowed_scope_prefixes: [personal, org, "client:", "project:"]
+
+# Source is mandatory. A candidate with no source excerpt is rejected outright.
+require_source_excerpt: true
+min_excerpt_words: 4
+max_source_age_days: 120        # older than this -> HARD park (stale)
+
+# Only risk: low may auto-promote; higher risk -> HARD park.
+auto_promote_risk: [low]
+
+# Third-judge name for split/hold and for boundary unanimity. Env MEMORY_TIEBREAK_JUDGE
+# wins if set; otherwise this default. Must be a key in _JUDGE_FNS (judge_a / judge_b / tiebreak).
+tiebreak_judge: tiebreak
+
+# ---------------------------------------------------------------------------
+# SENSITIVITY TAGS (not park reasons)
+# Matched domains/names are recorded as sensitivity: [...] on the envelope/ledger
+# and feed boundary/notify logic. They do NOT park. Sensitivity gets more agents,
+# not a human.
+# ---------------------------------------------------------------------------
+forbidden_domain_keywords:
+  health:     [health, medical, doctor, diagnosis, therapy, medication, mental health, neurodiver, addiction, adhd, autism]
+  legal_tax:  [legal, lawsuit, solicitor, tax, hmrc, vat, immigration, visa, contract dispute, regulatory, compliance]
+  security:   [password, api key, token, secret, credential, auth flow, private key, encryption, encryption-key, '.env', 'key must', 'keys must', ssh, ip address, backup location, recovery, 2fa, mfa]
+  finance_op: [revenue, margin, salary, invoice, runway, pricing strategy, bank account, sort code, budget, profit, debt]
+  reputation: [unreliable, difficult client, overcharg, incompetent, dishonest, disliked, poor performer, problematic]
+
+# Personal-sensitive names -> tag as name:<Name> (not park).
+sensitive_names: ["Example Person", "Another Example", "Third Example"]
+
+# ---------------------------------------------------------------------------
+# HARD STOPS (park/quarantine): protect the system, not a human's attention.
+# Secret-pattern quarantine + redaction: matched patterns force park + redact.
+# Other hard stops (in code): schema/type/scope validity, unverifiable source,
+# unknown scope, stale source age, non-low risk, judgement markers, weak excerpt.
+# ---------------------------------------------------------------------------
+forbidden_patterns:
+  - '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'   # emails
+  - '\bs[k]-[A-Za-z0-9]{8,}'                              # api keys
+  - '\b(?:\d{1,3}\.){3}\d{1,3}\b'                       # IPv4
+  - '[£$€]\s?\d'                                        # money figures
+  - '\b\+?\d[\d ]{8,}\d\b'                              # phone numbers
+  - '(github|gitlab)\.com/'                             # internal repo / deploy URLs
+  - 'export [A-Z_]{4,}'                                 # env-var / connection config
+  - ':\d{4,5}\b'                                        # host ports (connection detail)
+
+# Claims that must NEVER auto-promote regardless of type (agent judgement, not fact):
+never_promote_markers:
+  - probably
+  - i think
+  - seems like
+  - might be
+  - in the future
+  - predict
+  - my guess
+
+# ---------------------------------------------------------------------------
+# JUDGES: role placeholders only. Each role is backed by a command that reads the
+# prompt on stdin and prints the model's reply on stdout. Use a different model or
+# provider for each role. Keys are read from the environment by YOUR command, never
+# stored here. The code reads the command from the env var named in `cmd_env`.
+# ---------------------------------------------------------------------------
+judges:
+  judge_a:
+    cmd_env: MEMORY_JUDGE_A_CMD
+    example: "python3 examples/judge_stub.py"   # illustrative
+  judge_b:
+    cmd_env: MEMORY_JUDGE_B_CMD
+    example: "python3 examples/judge_stub.py"
+  tiebreak:
+    cmd_env: MEMORY_TIEBREAK_CMD
+    example: "python3 examples/judge_stub.py"
+providers_example:
+  provider_one:   {api_key_env: PROVIDER_ONE_API_KEY,   model: example-model-small}
+  provider_two:   {api_key_env: PROVIDER_TWO_API_KEY,   model: example-model-medium}
+  provider_three: {api_key_env: PROVIDER_THREE_API_KEY, model: example-model-large}

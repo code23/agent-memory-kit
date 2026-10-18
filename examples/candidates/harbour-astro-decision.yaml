@@ -1,0 +1,10 @@
+fact: Northwind Studio decided to build the Harbour Bakery site on Astro rather than WordPress.
+type: decision
+scope: client:harbour-bakery
+source:
+  kind: note
+  path: __EXAMPLES__/sources/northwind-kickoff-notes.md
+  excerpt: For Harbour Bakery we decided to build the new site on Astro rather than WordPress.
+observed_at: __TODAY__
+target_note: 03-resources/agent-systems/captured-client-harbour-bakery.md
+risk: low

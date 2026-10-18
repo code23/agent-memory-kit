@@ -1,0 +1,10 @@
+fact: Northwind Studio sends the Harbour Bakery weekly status report on Thursday afternoons by email.
+type: workflow
+scope: client:harbour-bakery
+source:
+  kind: note
+  path: __EXAMPLES__/sources/northwind-kickoff-notes.md
+  excerpt: The team agreed to send the weekly status report on Thursday afternoons by email.
+observed_at: __TODAY__
+target_note: 03-resources/agent-systems/captured-client-harbour-bakery.md
+risk: low

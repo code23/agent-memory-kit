@@ -1,0 +1,20 @@
+# Example scope registry. Copy to registry.yaml and edit.
+# aliases: scope slug -> canonical slug. destinations: canonical slug -> vault-relative note.
+aliases:
+  personal: personal
+  org: org
+  project-northwind: project-northwind
+destinations:
+  personal: 03-resources/ai-memory/captured-personal.md
+  org: 03-resources/agent-systems/captured-org.md
+  project-northwind: 03-resources/agent-systems/captured-project-northwind.md
+drop_patterns: []
+# Team routing is OFF unless MEMORY_TEAM_ROUTING=1 and MEMORY_TEAM_BIN is set, and even then it
+# is a positive allowlist: only the scopes listed here may be copied to a shared team store
+# (for example "org", "client:acme", "project:atlas"). An empty list shares nothing.
+team_share_scopes: []
+# Optional veto: slugs that are never shared even if listed above.
+team_exclude: []
+team_deny_terms_retired: []
+team_deny_terms_private: []
+private_candidate_hashes: []

@@ -1,0 +1,55 @@
+#!/bin/bash
+# Daily consensus triage: run the dual-agent loop over any queued candidates and
+# promote/park them. Unattended-safe: near-free no-op when the queue is empty
+# (no judge spawn, no cost, no popup), all output to a rolling log.
+#
+# Mutation locking: single-instance exclusivity lives in memory.py (ROOT/.mutation.lock
+# with owner.json token, stale after 2h). This shell script intentionally has NO
+# separate lock dir and holds no outer lock, each CLI invocation acquires its own.
+set -u
+# Resolve install root from this script (portable across clones/worktrees).
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+MEM="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOG="$MEM/ledger/triage-cron.log"
+mkdir -p "$MEM/ledger"
+ts() { date "+%Y-%m-%d %H:%M:%S"; }
+
+# The weekly command checks its own due date. No models are called on other days,
+# and deadlocks no longer create human tasks in the retired local tasks service.
+run_weekly_deadlocks() {
+  "$MEM/bin/memory" deadlocks-weekly --apply >> "$LOG" 2>&1
+  local weekly_rc=$?
+  if [ "$weekly_rc" -ne 0 ]; then
+    echo "$(ts) weekly deadlocks failed (exit $weekly_rc)" >> "$LOG"
+  fi
+  return "$weekly_rc"
+}
+
+# Cheap no-op when there is nothing to triage, still run locked maintenance
+# (recover stale processing + router-rebuild-if-dirty) as one quiet line.
+shopt -s nullglob
+cands=("$MEM/candidates"/*.yaml)
+if [ ${#cands[@]} -eq 0 ]; then
+  echo "$(ts) no candidates; running maintain" >> "$LOG"
+  "$MEM/bin/memory" maintain >> "$LOG" 2>&1 || true
+  run_weekly_deadlocks
+  exit $?
+fi
+
+echo "$(ts) triaging ${#cands[@]} candidate(s)..." >> "$LOG"
+"$MEM/bin/memory" run --apply >> "$LOG" 2>&1
+rc=$?
+# $(ts) runs before $? is read, so the old inline form always logged exit 0 (false green).
+echo "$(ts) done (exit $rc)" >> "$LOG"
+
+# Best-effort router rebuild after triage (does not change the recorded rc).
+"$MEM/bin/memory" router-rebuild-if-dirty >> "$LOG" 2>&1 || true
+
+# Preserve a triage failure; otherwise surface failed weekly maintenance.
+run_weekly_deadlocks
+weekly_rc=$?
+if [ "$rc" -eq 0 ] && [ "$weekly_rc" -ne 0 ]; then
+  rc=$weekly_rc
+fi
+
+exit $rc

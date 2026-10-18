@@ -1,0 +1,6 @@
+#!/bin/bash
+# Portable wrapper: resolve memory.py relative to this script, not a hardcoded path.
+# Needs python3 with PyYAML installed (pip install pyyaml).
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+exec python3 "$ROOT/memory.py" "$@"

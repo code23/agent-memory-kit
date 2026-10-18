@@ -1,0 +1,10 @@
+fact: At Harbour Bakery, every blog post is approved by Jo Example before it is published.
+type: workflow
+scope: client:harbour-bakery
+source:
+  kind: note
+  path: __EXAMPLES__/sources/northwind-kickoff-notes.md
+  excerpt: Harbour Bakery asked that every blog post is approved by Jo Example before it is published.
+observed_at: __TODAY__
+target_note: 03-resources/agent-systems/captured-client-harbour-bakery.md
+risk: low
