@@ -218,4 +218,4 @@ is off unless you set `MEMORY_TEAM_ROUTING=1`; see [docs/team-setup.md](docs/tea
 
 ## Licence
 
-MIT. Copyright (c) 2026 Code23 Ltd. See [LICENSE](LICENSE).
+MIT. Copyright (c) 2026 Twenty & Three Ltd, trading as Code23. See [LICENSE](LICENSE).
