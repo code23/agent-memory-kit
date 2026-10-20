@@ -12,6 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
 MEM="$(cd "$SCRIPT_DIR/.." && pwd)"
 # State (candidates, ledger) lives under MEMORY_ROOT when it is set, as memory.py does.
 STATE="${MEMORY_ROOT:-$MEM}"
+case "$STATE" in "~") STATE="$HOME" ;; "~/"*) STATE="$HOME/${STATE#\~/}" ;; esac
+case "$STATE" in /*) ;; *) STATE="$PWD/$STATE" ;; esac
 LOG="$STATE/ledger/triage-cron.log"
 mkdir -p "$STATE/ledger"
 ts() { date "+%Y-%m-%d %H:%M:%S"; }

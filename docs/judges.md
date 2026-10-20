@@ -46,9 +46,11 @@ providers_example:
 ## The ready-made command: `funnel/judges/judge.py`
 
 You don't have to write a judge. `funnel/judges/judge.py` reads the prompt on stdin, asks
-one model and prints only the first JSON object or list in its reply, however much else the
-model says. If the model fails, times out or returns no JSON, it exits non-zero, which the
-funnel counts as an invalid vote (so the fact waits for a person). Standard library only.
+one model and prints its JSON reply. The reply must be one JSON object or list, optionally
+inside a single code fence; prose around it or more than one object is refused, so a vote is
+never picked out of a mixed reply. If the model fails, times out or answers any other way,
+it exits non-zero, which the funnel counts as an invalid vote (so the fact waits for a
+person). Error messages give the provider and HTTP status only, never the response body. Standard library only.
 
 | Provider | Command | Key variable |
 |---|---|---|

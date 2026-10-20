@@ -41,8 +41,8 @@ Put the `export` lines in your shell profile once you are happy with them.
 ## 3. Choose the three models
 
 Each seat is a command. The kit includes one that works with most providers:
-`funnel/judges/judge.py`. It reads the prompt, asks the model and prints only the JSON
-the funnel needs, however chatty the model is.
+`funnel/judges/judge.py`. It reads the prompt, asks the model and passes on its JSON
+answer. A reply with anything else in it is refused, so a muddled answer can't count as a vote.
 
 **The one rule: a different company in each seat.** Two models from the same company tend
 to agree with each other for the wrong reasons.
@@ -61,7 +61,8 @@ to agree with each other for the wrong reasons.
 Use the exact model name from your provider's model list. Model names change every few
 months, so the kit doesn't guess one for you.
 
-Keys come from your environment, never from a file in the kit. Load them from your secret
+Keys come from your environment, never from a file in the kit, and never as part of a seat
+command. Load them from your secret
 store when the shell starts. On a Mac, for example, after saving a key in Keychain:
 
 ```bash
@@ -86,8 +87,8 @@ export MEMORY_JUDGE_A_CMD="python3 $KIT/funnel/judges/judge.py --exec 'claude -p
 ```
 
 Check your tool's documentation for its non-interactive mode, and run it once by hand to
-make sure it doesn't stop for a login or a permission prompt. `judge.py` strips everything
-except the JSON.
+make sure it doesn't stop for a login or a permission prompt. `judge.py` removes a code fence
+around the JSON; any other extra text makes the vote invalid, and `doctor --ping` tells you.
 
 ### Where your data goes
 

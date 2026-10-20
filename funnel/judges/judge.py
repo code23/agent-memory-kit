@@ -17,10 +17,11 @@ Two ways to reach a model:
         and keeps only the JSON from whatever it prints. Use this to judge with a
         subscription you already sign in to, rather than an API key.
 
-Models chatter. Whatever comes back, this script prints exactly one JSON value (the
-first JSON object or list in the reply) or exits non-zero. The funnel treats a
-non-zero exit as an invalid vote, so a broken seat parks facts for a person instead
-of letting them through.
+The reply must be one JSON object or list, optionally inside a single ``` code fence.
+This script strips the fence and prints the JSON, or exits non-zero for anything else
+(prose around it, several objects, an error). It never picks a vote out of a mixed
+reply. The funnel treats a non-zero exit as an invalid vote, so a broken or chatty seat
+parks facts for a person instead of letting them through.
 
 Standard library only. See docs/judges.md and docs/first-real-run.md.
 """
@@ -55,6 +56,14 @@ SYSTEM = (
     "else: no explanation, no markdown, no code fences."
 )
 
+_HTTP_HINT = {
+    400: " (bad request: check the model name and options)",
+    401: " (the key was refused)",
+    403: " (the key has no access to this model)",
+    404: " (model or endpoint not found: check --model and --base-url)",
+    429: " (rate limit or quota reached)",
+}
+
 EXIT_CONFIG = 2   # bad arguments or a missing key
 EXIT_MODEL = 3    # the model or tool failed, or its reply held no JSON
 
@@ -65,35 +74,31 @@ class JudgeError(Exception):
         self.code = code
 
 
-def extract_json(text):
-    """Return the first JSON object or list in *text*, re-serialised compactly.
+_FENCE = re.compile(r"\A```[A-Za-z]*[ \t]*\n?(.*?)\n?```\Z", re.S)
 
-    Handles a bare JSON reply, a reply wrapped in ``` fences, and JSON surrounded by
-    prose. Raises JudgeError when there is none.
+
+def extract_json(text):
+    """Return the reply's JSON object or list, re-serialised compactly.
+
+    Strict on purpose. The whole reply must be one JSON object or list, optionally
+    wrapped in a single ``` code fence. Prose around it, or more than one JSON value, is
+    refused: a vote is never picked out of a mixed reply, because the reply can quote the
+    untrusted evidence it was judging. Raises JudgeError otherwise.
     """
     s = (text or "").strip()
     if not s:
         raise JudgeError("the model returned an empty reply")
-    fenced = re.findall(r"```(?:json)?\s*(.*?)```", s, flags=re.S)
-    for chunk in fenced + [s]:
-        chunk = chunk.strip()
-        try:
-            obj = json.loads(chunk)
-            if isinstance(obj, (dict, list)):
-                return json.dumps(obj, ensure_ascii=False)
-        except ValueError:
-            pass
-    decoder = json.JSONDecoder()
-    for i, ch in enumerate(s):
-        if ch not in "{[":
-            continue
-        try:
-            obj, _ = decoder.raw_decode(s[i:])
-        except ValueError:
-            continue
-        if isinstance(obj, (dict, list)):
-            return json.dumps(obj, ensure_ascii=False)
-    raise JudgeError("the model's reply held no JSON object or list")
+    m = _FENCE.match(s)
+    if m:
+        s = m.group(1).strip()
+    try:
+        obj = json.loads(s)
+    except ValueError:
+        raise JudgeError("the reply was not a single JSON value (extra text or more than "
+                         "one object). Ask the model for JSON only.")
+    if not isinstance(obj, (dict, list)):
+        raise JudgeError("the reply was JSON but not an object or list")
+    return json.dumps(obj, ensure_ascii=False)
 
 
 def build_request(provider, model, prompt, key, base_url=None, max_tokens=2048):
@@ -154,10 +159,10 @@ def call_api(provider, model, prompt, key_env=None, base_url=None, timeout=100,
         with urllib.request.urlopen(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
-        raise JudgeError(f"{provider} returned HTTP {e.code}: {detail}")
+        # The response body is never shown: a server can echo the key or the prompt.
+        raise JudgeError(f"{provider} returned HTTP {e.code}{_HTTP_HINT.get(e.code, '')}")
     except urllib.error.URLError as e:
-        raise JudgeError(f"could not reach {provider}: {e.reason}")
+        raise JudgeError(f"could not reach {provider} ({type(e.reason).__name__})")
     except TimeoutError:
         raise JudgeError(f"{provider} did not answer within {timeout} seconds")
     except ValueError:

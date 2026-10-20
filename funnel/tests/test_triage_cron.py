@@ -13,7 +13,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 class CronTests(unittest.TestCase):
-    def run_cron(self, *, candidates=False, triage_rc=0, weekly_rc=0, private_root=False):
+    def run_cron(self, *, candidates=False, triage_rc=0, weekly_rc=0, private_root=False, tilde=False):
         with tempfile.TemporaryDirectory(prefix="memory-cron-test-") as td:
             root = Path(td)
             (root / "bin").mkdir()
@@ -37,6 +37,9 @@ class CronTests(unittest.TestCase):
             env.update({"TEST_TRIAGE_RC": str(triage_rc), "TEST_WEEKLY_RC": str(weekly_rc)})
             if private_root:
                 env["MEMORY_ROOT"] = str(state)
+            if tilde:
+                env["HOME"] = str(root)
+                env["MEMORY_ROOT"] = "~/" + state.name
             result = subprocess.run(["bash", str(root / "bin" / "triage-cron")],
                                     env=env, capture_output=True, text=True, timeout=10)
             return result, (root / "calls").read_text().splitlines(), (state / "ledger" / "triage-cron.log").read_text()
@@ -56,6 +59,12 @@ class CronTests(unittest.TestCase):
         result, calls, log = self.run_cron(candidates=True, private_root=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, ["run --apply", "router-rebuild-if-dirty", "deadlocks-weekly --apply"])
+        self.assertIn("triaging 1 candidate(s)", log)
+
+    def test_tilde_memory_root_is_expanded(self):
+        result, calls, log = self.run_cron(candidates=True, private_root=True, tilde=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls[0], "run --apply")
         self.assertIn("triaging 1 candidate(s)", log)
 
     def test_empty_queue_reports_weekly_failure(self):

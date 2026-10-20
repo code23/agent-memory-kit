@@ -75,12 +75,13 @@ class Doctor(unittest.TestCase):
 
     def test_stub_next_to_a_real_model_fails(self):
         self.ready_folders()
-        real = f"{ADAPTER} --exec 'some-model-cli -p'"
+        real = f"{ADAPTER} --exec 'some-model-cli -p --api-key sk-should-not-print'"
         r = self.doctor({"MEMORY_JUDGE_A_CMD": real, "MEMORY_JUDGE_B_CMD": STUB,
                          "MEMORY_TIEBREAK_CMD": STUB + " "})
         self.assertEqual(r.returncode, 1)
         self.assertIn("The offline stub is in Judge B, Tiebreak next to real models", r.stdout)
-        self.assertIn("Judge A: CLI: some-model-cli -p", r.stdout)
+        self.assertIn("Judge A: CLI: some-model-cli", r.stdout)
+        self.assertNotIn("sk-should-not-print", r.stdout + r.stderr)
 
     def test_ping_uses_each_seat(self):
         self.ready_folders()

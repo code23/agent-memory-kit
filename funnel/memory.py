@@ -5783,10 +5783,15 @@ def _seat_label(cmd, exe):
     if any(Path(a).name == "judge.py" for a in argv):
         opts = dict(zip(argv, argv[1:]))
         if "--exec" in opts:
-            return "CLI: " + opts["--exec"]
+            # Only the tool's name: its arguments could carry a credential.
+            try:
+                tool = shlex.split(opts["--exec"])[0]
+            except (ValueError, IndexError):
+                tool = "?"
+            return "CLI: " + Path(tool).name
         prov = _seat_provider(cmd) or "judge.py"
         return f"{prov} {opts['--model']}" if "--model" in opts else prov
-    return Path(exe).name
+    return Path(exe).name  # never the arguments, which could carry a credential
 
 
 def doctor_findings(ping=False):
@@ -5899,7 +5904,7 @@ def doctor_findings(ping=False):
                 continue
             if parsed is None:
                 add("fail", f"{seat} answered, but not with clean JSON",
-                    "Wrap it with funnel/judges/judge.py --exec \"...\" to strip extra text.")
+                    "Ask the model for JSON only (judge.py accepts one JSON value, optionally in a code fence).")
             else:
                 add("ok", f"{seat} answered the test prompt")
 

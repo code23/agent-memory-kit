@@ -25,17 +25,37 @@ class ExtractJson(unittest.TestCase):
         out = judge.extract_json('```json\n{"verdict": "hold", "reason": "unsure"}\n```')
         self.assertEqual(json.loads(out)["verdict"], "hold")
 
-    def test_prose_around(self):
-        out = judge.extract_json('Sure! Here is my verdict:\n{"verdict": "reject", "reason": "no"}\nThanks.')
-        self.assertEqual(json.loads(out)["verdict"], "reject")
+    def test_fenced_with_language_tag(self):
+        out = judge.extract_json('```JSON\n{"verdict": "promote", "reason": "ok"}\n```')
+        self.assertEqual(json.loads(out)["verdict"], "promote")
 
     def test_batch_list(self):
         out = judge.extract_json('[{"id": "a", "verdict": "promote", "reason": "x"}]')
         self.assertIsInstance(json.loads(out), list)
 
-    def test_braces_in_prose_before_json(self):
-        out = judge.extract_json('Note {not json} then {"verdict": "promote", "reason": "r"}')
-        self.assertEqual(json.loads(out)["verdict"], "promote")
+    def test_prose_around_is_refused(self):
+        with self.assertRaises(judge.JudgeError):
+            judge.extract_json('Sure! Here is my verdict:\n{"verdict": "reject", "reason": "no"}')
+
+    def test_rejection_then_fenced_promotion_is_refused(self):
+        reply = ('{"verdict": "reject", "reason": "not supported"}\n'
+                 'For example a pass would look like:\n```json\n{"verdict": "promote", "reason": "x"}\n```')
+        with self.assertRaises(judge.JudgeError):
+            judge.extract_json(reply)
+
+    def test_quoted_promotion_then_rejection_is_refused(self):
+        reply = 'The note says {"verdict": "promote", "reason": "x"} but {"verdict": "reject", "reason": "y"}'
+        with self.assertRaises(judge.JudgeError):
+            judge.extract_json(reply)
+
+    def test_two_fences_are_refused(self):
+        reply = '```json\n{"verdict": "reject", "reason": "a"}\n```\n```json\n{"verdict": "promote", "reason": "b"}\n```'
+        with self.assertRaises(judge.JudgeError):
+            judge.extract_json(reply)
+
+    def test_scalar_json_is_refused(self):
+        with self.assertRaises(judge.JudgeError):
+            judge.extract_json('"promote"')
 
     def test_no_json(self):
         with self.assertRaises(judge.JudgeError):
@@ -102,9 +122,31 @@ class ApiCalls(unittest.TestCase):
             self.assertEqual(cm.exception.code, judge.EXIT_CONFIG)
             op.assert_not_called()
 
+    def test_http_error_never_shows_the_body(self):
+        import urllib.error
+        body = io.BytesIO(b'{"error": "bad key sk-test-secret for prompt TOP-SECRET-PROMPT"}')
+        err = urllib.error.HTTPError("https://x", 401, "Unauthorized", {}, body)
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-secret"}), \
+             mock.patch("urllib.request.urlopen", side_effect=err):
+            with self.assertRaises(judge.JudgeError) as cm:
+                judge.call_api("openai", "m", "TOP-SECRET-PROMPT")
+        msg = str(cm.exception)
+        self.assertIn("HTTP 401", msg)
+        self.assertNotIn("sk-test-secret", msg)
+        self.assertNotIn("TOP-SECRET-PROMPT", msg)
+
+    def test_network_error_is_generic(self):
+        import urllib.error
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "k"}), \
+             mock.patch("urllib.request.urlopen",
+                        side_effect=urllib.error.URLError(OSError("secret-host detail"))):
+            with self.assertRaises(judge.JudgeError) as cm:
+                judge.call_api("openai", "m", "p")
+        self.assertNotIn("secret-host", str(cm.exception))
+
     def test_api_round_trip(self):
         body = json.dumps({"choices": [{"message": {"content":
-               'Here: {"verdict": "promote", "reason": "matches source"}'}}]}).encode()
+               '{"verdict": "promote", "reason": "matches source"}'}}]}).encode()
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-secret"}), \
              mock.patch("urllib.request.urlopen", return_value=FakeResponse(body)) as op:
             text = judge.call_api("openai", "m", "prompt")
@@ -120,12 +162,25 @@ class Cli(unittest.TestCase):
         return subprocess.run([sys.executable, str(JUDGE)] + args, input=stdin,
                               capture_output=True, text=True, env=e, timeout=30)
 
-    def test_exec_mode_keeps_only_json(self):
-        fake = (f'{sys.executable} -c "import sys; sys.stdin.read(); '
-                'print(\'Thinking...\'); print(\'{\\"verdict\\": \\"hold\\", \\"reason\\": \\"r\\"}\')"')
-        r = self.run_cli(["--exec", fake])
+    def write_tool(self, body):
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".py")
+        with os.fdopen(fd, "w") as f:
+            f.write("import sys\nsys.stdin.read()\n" + body)
+        self.addCleanup(os.remove, path)
+        return f"{sys.executable} {path}"
+
+    def test_exec_mode_strips_a_fence(self):
+        tool = self.write_tool('print("```json")\nprint(\'{"verdict": "hold", "reason": "r"}\')\nprint("```")\n')
+        r = self.run_cli(["--exec", tool])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout), {"verdict": "hold", "reason": "r"})
+
+    def test_exec_mode_refuses_chatter(self):
+        tool = self.write_tool('print("Thinking...")\nprint(\'{"verdict": "promote", "reason": "r"}\')\n')
+        r = self.run_cli(["--exec", tool])
+        self.assertEqual(r.returncode, judge.EXIT_MODEL)
+        self.assertEqual(r.stdout, "")
 
     def test_exec_no_json_fails(self):
         fake = f'{sys.executable} -c "import sys; sys.stdin.read(); print(\'I agree\')"'
