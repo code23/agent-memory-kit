@@ -67,7 +67,8 @@ seconds; the funnel gives each seat 120), `--max-tokens` (default 2048). The sam
 works as `MEMORY_EXTRACTOR_CMD`.
 
 `python3 funnel/memory.py doctor` checks every seat: command found, key present (never
-shown), the same command or provider in two seats. `doctor --ping` sends each seat a one-line
+shown), the same command or provider in two seats, and the offline stub sitting next to a
+real model (it approves everything, so it could outvote a real "no"). `doctor --ping` sends each seat a one-line
 test prompt and flags any that don't answer with clean JSON.
 
 ## Writing your own

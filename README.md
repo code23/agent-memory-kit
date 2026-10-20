@@ -82,7 +82,8 @@ examples/                  fictional facts, notes and demo scripts
 
 ## Quick start
 
-You need Python 3 and PyYAML. I have tested it on Python 3.14 only.
+You need Python 3.9 or newer and PyYAML. I have tested it on Python 3.9, 3.12 and 3.14 on
+macOS. It should run on Linux; Windows is untested.
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate

@@ -45,10 +45,10 @@ python3 funnel/tests/test_doctor.py
 | Re-triage | `test_retriage_batches.py` | dry run, apply, evidence changes mid run |
 | Exact duplicate gate | `test_exact_duplicate_gate.py` | normalised duplicate detection against the target note |
 | Quoted judgement | `test_quoted_judgment.py` | a quoted opinion is not accepted as an agent opinion marker |
-| Cron wrapper | `test_triage_cron.py` | empty queue, triage failure, weekly failure exit codes, candidates under a private `MEMORY_ROOT` |
+| Cron wrapper | `test_triage_cron.py` | empty queue, triage failure, weekly failure exit codes, candidates under a private `MEMORY_ROOT`, including one written with `~` |
 | Router | `test_router.py` | ranking, ambiguity, scope limited reads, malformed index handling |
-| Judge command | `test_judge_adapter.py` | JSON pulled out of chatty, fenced or prose replies; request shape per provider (key in a header, never the URL); missing key fails before any call; `--exec` mode |
-| Doctor | `test_doctor.py` | missing seats, folders and vault named in plain English; missing key named but never shown; same provider in two seats; `--ping` flags a seat without clean JSON |
+| Judge command | `test_judge_adapter.py` | strict replies: bare JSON or one code fence accepted; prose, several objects or a quoted vote refused; request shape per provider (key in a header, never the URL); missing key fails before any call; HTTP and network errors never show the response body; `--exec` mode |
+| Doctor | `test_doctor.py` | missing seats, folders and vault named in plain English; missing key named but never shown; same provider in two seats; the offline stub next to a real model fails; a wrapped CLI's arguments are never shown; `--ping` flags a seat without clean JSON |
 | Integration | `integration_phase0.py` | end to end promote, reject, park and undo in a temporary tree |
 
 ## Rules for new tests

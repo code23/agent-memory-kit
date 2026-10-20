@@ -25,6 +25,8 @@ Yes, because the memory is files and a few commands. Any agent that can read a f
 a command can use the router. The snippets in `agent-instructions/` cover `CLAUDE.md`,
 `AGENTS.md`, `GEMINI.md` and Cursor rules. For judging, each role is a command you point at
 whichever model or local runtime you like, so mixing providers is a configuration change.
+The ready-made `funnel/judges/judge.py` covers Anthropic, OpenAI, Gemini, xAI, OpenRouter,
+OpenAI-compatible servers and model CLIs, so you don't have to write that command yourself.
 
 ## 4. Do I need a database?
 
@@ -108,7 +110,9 @@ facts a day the cost is usually small next to the time it saves.
 One client, one page. Pick a client you work with often. Create a single page for them.
 Write down five facts you wish every agent knew, each with a source and a date. Commit
 the page, point your agent instructions at it, and use it for a week. Add the funnel only
-when proposing facts by hand becomes a chore.
+when proposing facts by hand becomes a chore. When you do,
+[first-real-run.md](first-real-run.md) takes you from a fresh clone to your first fact checked
+by real models, and `python3 funnel/memory.py doctor` tells you what is still missing.
 
 ## 13. Why a second and third model rather than one?
 
