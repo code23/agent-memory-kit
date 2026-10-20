@@ -5738,6 +5738,204 @@ def _self_checks():
     print("self-checks OK")
 
 
+_SEAT_ENVS = (("Judge A", "MEMORY_JUDGE_A_CMD"), ("Judge B", "MEMORY_JUDGE_B_CMD"),
+              ("Tiebreak", "MEMORY_TIEBREAK_CMD"))
+_DOCTOR_PING = ('This is a connection test. Reply with exactly this JSON and nothing else: '
+                '{"verdict": "hold", "reason": "ping"}')
+
+
+def _seat_provider(cmd):
+    """Provider named in a judges/judge.py command, or None for any other command."""
+    import shlex
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        return None
+    if not any(Path(a).name == "judge.py" for a in argv):
+        return None
+    for i, a in enumerate(argv):
+        if a == "--provider" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--provider="):
+            return a.split("=", 1)[1]
+    return None
+
+
+def _seat_key_env(cmd, provider):
+    import shlex
+    argv = shlex.split(cmd)
+    for i, a in enumerate(argv):
+        if a == "--key-env" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--key-env="):
+            return a.split("=", 1)[1]
+    return {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
+            "gemini": "GEMINI_API_KEY", "xai": "XAI_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY"}.get(provider)
+
+
+def _seat_label(cmd, exe):
+    """Short, readable description of a seat command for doctor output."""
+    import shlex
+    argv = shlex.split(cmd)
+    if any(Path(a).name == "judge_stub.py" for a in argv):
+        return "offline stub"
+    if any(Path(a).name == "judge.py" for a in argv):
+        opts = dict(zip(argv, argv[1:]))
+        if "--exec" in opts:
+            return "CLI: " + opts["--exec"]
+        prov = _seat_provider(cmd) or "judge.py"
+        return f"{prov} {opts['--model']}" if "--model" in opts else prov
+    return Path(exe).name
+
+
+def doctor_findings(ping=False):
+    """Check the set-up. Returns a list of (level, message, fix) with level in ok|warn|fail."""
+    import shlex
+    out = []
+
+    def add(level, message, fix=""):
+        out.append((level, message, fix))
+
+    if sys.version_info < (3, 9):
+        add("fail", f"Python {sys.version.split()[0]} is too old", "Use Python 3.9 or newer.")
+    else:
+        add("ok", f"Python {sys.version.split()[0]}")
+
+    # Where the data lives
+    if not os.environ.get("MEMORY_ROOT"):
+        add("warn", f"MEMORY_ROOT is not set, so state is kept inside the kit ({ROOT})",
+            "Set MEMORY_ROOT to a private folder outside the clone, e.g. ~/memory-private/state.")
+    elif ROOT == CODE_DIR or CODE_DIR.parent in ROOT.parents or ROOT == CODE_DIR.parent:
+        add("warn", f"MEMORY_ROOT ({ROOT}) is inside the kit clone",
+            "Keep real data outside the clone so it can never be published by accident.")
+    else:
+        add("ok", f"State folder: {ROOT}")
+    if _POLICY_PATH == CODE_DIR / "policy.example.yaml":
+        add("warn", "Using the example policy (no policy.yaml in MEMORY_ROOT)",
+            f"cp funnel/policy.example.yaml {ROOT}/policy.yaml, then edit it.")
+    else:
+        add("ok", f"Policy: {_POLICY_PATH}")
+    if (ROOT / "registry.yaml").is_file():
+        add("ok", "Registry (client scopes and their pages) found")
+    else:
+        add("fail", f"No registry.yaml in {ROOT}",
+            f"cp funnel/registry.example.yaml {ROOT}/registry.yaml and add a scope per client.")
+    if (ROOT / "candidates").is_dir():
+        n = len([p for p in (ROOT / "candidates").glob("*.yaml") if not p.name.startswith(".")])
+        add("ok", f"Proposal inbox ready ({n} waiting)")
+    else:
+        add("fail", f"No candidates/ folder in {ROOT}", f"mkdir -p {ROOT}/candidates")
+
+    vault = VAULT if VAULT.is_absolute() else (CODE_DIR.parent / VAULT)
+    if not vault.is_dir():
+        add("fail", f"Trusted vault not found at {vault}",
+            "Set VAULT_ROOT to your trusted notes folder (outside the clone).")
+    else:
+        add("ok", f"Trusted vault: {vault}")
+        if (vault / ".git").exists():
+            if os.environ.get("MEMORY_GIT_COMMIT") == "1":
+                add("ok", "The vault is a git repo and every promotion is committed")
+            else:
+                add("warn", "The vault is a git repo, but promotions are not committed",
+                    "Set MEMORY_GIT_COMMIT=1 (or pass --commit) so every fact has an undo.")
+        else:
+            add("warn", "The vault is not a git repository, so there is no history or undo",
+                f"git -C {vault} init && git -C {vault} add -A && git -C {vault} commit -m seed")
+
+    # The three seats
+    cmds, providers = {}, {}
+    for seat, env in _SEAT_ENVS:
+        cmd = os.environ.get(env, "").strip()
+        if not cmd:
+            add("fail", f"{seat} has no model ({env} is not set)",
+                "Point it at a model, e.g. python3 funnel/judges/judge.py --provider anthropic "
+                "--model <name>. See docs/first-real-run.md.")
+            continue
+        cmds[seat] = cmd
+        try:
+            exe = shlex.split(cmd)[0]
+        except (ValueError, IndexError):
+            add("fail", f"{seat}: {env} cannot be read as a command", "Check the quoting.")
+            continue
+        if not (shutil.which(exe) or Path(exe).expanduser().is_file()):
+            add("fail", f"{seat}: '{exe}' was not found", "Install it or use the full path.")
+            continue
+        if "judge_stub.py" in cmd:
+            add("warn", f"{seat} uses the offline stub, which promotes everything",
+                "Fine for a dry run. Point it at a real model before using real facts.")
+        prov = _seat_provider(cmd)
+        if prov:
+            providers[seat] = prov
+            key_env = _seat_key_env(cmd, prov)
+            if key_env and not os.environ.get(key_env):
+                add("fail", f"{seat} uses {prov} but {key_env} is not set",
+                    f"Set {key_env} in your shell or secret store (never in a file in the kit).")
+                continue
+        add("ok", f"{seat}: {_seat_label(cmd, exe)}")
+    stub_seats = [s for s, c in cmds.items() if "judge_stub.py" in c]
+    if stub_seats and len(stub_seats) < len(cmds):
+        add("fail", f"The offline stub is in {', '.join(stub_seats)} next to real models",
+            "The stub approves everything, so it can outvote a real model that said no. "
+            "Use the stub in every seat (dry run) or in none.")
+    if len(set(cmds.values())) < len(cmds):
+        add("warn", "Two seats run the same command",
+            "Use a different model, ideally from a different company, in each seat.")
+    if len(providers) >= 2 and len(set(providers.values())) < len(providers):
+        add("warn", "Two seats use the same provider",
+            "Models from one company tend to agree with each other. Mix providers.")
+    try:
+        resolve_judge_set()
+    except JudgeConfigError as e:
+        add("fail", f"Judge roles: {e.message}", "Check MEMORY_JUDGES and MEMORY_TIEBREAK_JUDGE.")
+
+    if ping:
+        envs = dict(_SEAT_ENVS)
+        for seat, cmd in cmds.items():
+            try:
+                parsed = parse_judge_response(_cmd_raw(envs[seat], _DOCTOR_PING, 120))
+            except Exception as e:
+                add("fail", f"{seat} did not answer: {e}", "Run the command by hand to see why.")
+                continue
+            if parsed is None:
+                add("fail", f"{seat} answered, but not with clean JSON",
+                    "Wrap it with funnel/judges/judge.py --exec \"...\" to strip extra text.")
+            else:
+                add("ok", f"{seat} answered the test prompt")
+
+    if os.environ.get("MEMORY_EXTRACTOR_CMD"):
+        add("ok", "Extractor set (capture.py can pull facts out of notes)")
+    else:
+        add("warn", "No extractor (MEMORY_EXTRACTOR_CMD), so capture.py cannot read notes",
+            "Optional. Point it at judge.py too if you want facts pulled from call notes.")
+    if (ROOT / "router" / "router-index.md").is_file():
+        add("ok", "Search index built")
+    else:
+        add("warn", "No search index yet", "python3 funnel/memory.py router-rebuild-if-dirty "
+            "(or build_index.py) after your first promotion.")
+    return out
+
+
+def cmd_doctor(args):
+    findings = doctor_findings(ping=args.ping)
+    mark = {"ok": "ok  ", "warn": "warn", "fail": "FAIL"}
+    for level, message, fix in findings:
+        print(f"[{mark[level]}] {message}")
+        if fix and level != "ok":
+            print(f"       -> {fix}")
+    fails = sum(1 for f in findings if f[0] == "fail")
+    warns = sum(1 for f in findings if f[0] == "warn")
+    print()
+    if fails:
+        print(f"{fails} thing(s) to fix before real facts can be promoted, {warns} to consider.")
+        if not args.ping:
+            print("When the seats are set, run `memory.py doctor --ping` to test each model.")
+        sys.exit(1)
+    print(f"Ready. {warns} suggestion(s)." if warns else "Ready.")
+    if not args.ping:
+        print("Run `memory.py doctor --ping` to send each model a one-line test prompt.")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="memory")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -5790,6 +5988,10 @@ def main():
     dw.add_argument("--apply", action="store_true")
     dw.set_defaults(fn=cmd_deadlocks_weekly)
     sc = sub.add_parser("self-check", help="run pure-function self-checks"); sc.set_defaults(fn=lambda a: _self_checks())
+    dr = sub.add_parser("doctor", help="check the set-up and say, in plain English, what is missing")
+    dr.add_argument("--ping", action="store_true",
+                    help="also send each judge a one-line test prompt (makes one model call per seat)")
+    dr.set_defaults(fn=cmd_doctor)
     a = ap.parse_args()
     if getattr(a, "commit", False):
         os.environ["MEMORY_GIT_COMMIT"] = "1"

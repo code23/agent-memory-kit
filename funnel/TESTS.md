@@ -16,6 +16,8 @@ python3 funnel/tests/test_private_team_boundary.py
 python3 funnel/tests/test_quoted_judgment.py
 python3 funnel/tests/test_triage_cron.py
 python3 funnel/tests/test_router.py
+python3 funnel/tests/test_judge_adapter.py
+python3 funnel/tests/test_doctor.py
 ```
 
 `pytest funnel/tests` also collects the unittest based suites.
@@ -43,8 +45,10 @@ python3 funnel/tests/test_router.py
 | Re-triage | `test_retriage_batches.py` | dry run, apply, evidence changes mid run |
 | Exact duplicate gate | `test_exact_duplicate_gate.py` | normalised duplicate detection against the target note |
 | Quoted judgement | `test_quoted_judgment.py` | a quoted opinion is not accepted as an agent opinion marker |
-| Cron wrapper | `test_triage_cron.py` | empty queue, triage failure, weekly failure exit codes |
+| Cron wrapper | `test_triage_cron.py` | empty queue, triage failure, weekly failure exit codes, candidates under a private `MEMORY_ROOT` |
 | Router | `test_router.py` | ranking, ambiguity, scope limited reads, malformed index handling |
+| Judge command | `test_judge_adapter.py` | JSON pulled out of chatty, fenced or prose replies; request shape per provider (key in a header, never the URL); missing key fails before any call; `--exec` mode |
+| Doctor | `test_doctor.py` | missing seats, folders and vault named in plain English; missing key named but never shown; same provider in two seats; `--ping` flags a seat without clean JSON |
 | Integration | `integration_phase0.py` | end to end promote, reject, park and undo in a temporary tree |
 
 ## Rules for new tests

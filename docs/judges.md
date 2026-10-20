@@ -43,8 +43,35 @@ providers_example:
   provider_one: {api_key_env: PROVIDER_ONE_API_KEY, model: example-model-small}
 ```
 
-A minimal judge command is a short script that reads stdin, calls your provider with a key
-from `os.environ`, and prints the JSON reply. `examples/judge_stub.py` shows the shape and
+## The ready-made command: `funnel/judges/judge.py`
+
+You don't have to write a judge. `funnel/judges/judge.py` reads the prompt on stdin, asks
+one model and prints only the first JSON object or list in its reply, however much else the
+model says. If the model fails, times out or returns no JSON, it exits non-zero, which the
+funnel counts as an invalid vote (so the fact waits for a person). Standard library only.
+
+| Provider | Command | Key variable |
+|---|---|---|
+| Anthropic | `judge.py --provider anthropic --model <model>` | `ANTHROPIC_API_KEY` |
+| OpenAI | `judge.py --provider openai --model <model>` | `OPENAI_API_KEY` |
+| Google Gemini | `judge.py --provider gemini --model <model>` | `GEMINI_API_KEY` |
+| xAI | `judge.py --provider xai --model <model>` | `XAI_API_KEY` |
+| OpenRouter | `judge.py --provider openrouter --model <vendor/model>` | `OPENROUTER_API_KEY` |
+| Any OpenAI-compatible server (Ollama, LM Studio, vLLM, Mistral) | `judge.py --provider openai-compatible --base-url <url> --model <model>` | `--key-env NAME` if it needs one |
+| A model's own CLI | `judge.py --exec "claude -p"` | the CLI's own sign-in |
+
+Options: `--key-env` reads the key from a different variable, `--timeout` (default 100
+seconds; the funnel gives each seat 120), `--max-tokens` (default 2048). The same command
+works as `MEMORY_EXTRACTOR_CMD`.
+
+`python3 funnel/memory.py doctor` checks every seat: command found, key present (never
+shown), the same command or provider in two seats. `doctor --ping` sends each seat a one-line
+test prompt and flags any that don't answer with clean JSON.
+
+## Writing your own
+
+A judge command is any program that reads stdin, calls your provider with a key from
+`os.environ`, and prints the JSON reply. `examples/judge_stub.py` shows the shape and
 makes no call, which is what the dry run uses.
 
 Use a different provider for each role where you can. Two copies of the same model agree

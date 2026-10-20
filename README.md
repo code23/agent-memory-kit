@@ -49,6 +49,7 @@ router/                    model free lexical router (build_index.py, route.py)
 funnel/                    the promotion funnel
   memory.py                the consensus loop: gates, judges, promote, undo
   capture.py               extracts candidate facts from prose notes
+  judges/judge.py          ready-made model command for any seat (API or a model's CLI)
   safe_io.py               the one symlink-safe file writer used by the funnel and the router
   policy.example.yaml      policy: types, scopes, secret patterns, judge roles
   registry.example.yaml    scope to destination map
@@ -67,6 +68,7 @@ examples/                  fictional facts, notes and demo scripts
 
 | Document | What it covers |
 |----------|----------------|
+| [docs/first-real-run.md](docs/first-real-run.md) | From a fresh clone to your first fact checked by real models, then a daily schedule |
 | [docs/promotion-protocol.md](docs/promotion-protocol.md) | Inbox, evidence, write lock, local commit |
 | [docs/folder-layout.md](docs/folder-layout.md) | An example vault with staging and trusted folders |
 | [docs/how-agents-use-it.md](docs/how-agents-use-it.md) | The agent lifecycle: read, cite, propose, check. Includes a sequence diagram |
@@ -121,8 +123,19 @@ extractor. Only the stub in `examples/` makes no call. Point the variables at th
 you have read what your real commands do.
 
 To use real models, set `MEMORY_JUDGE_A_CMD`, `MEMORY_JUDGE_B_CMD` and `MEMORY_TIEBREAK_CMD`
-to commands that read a prompt on stdin and print JSON. See [docs/judges.md](docs/judges.md).
+to commands that read a prompt on stdin and print JSON. The ready-made
+`funnel/judges/judge.py` does this for Anthropic, OpenAI, Gemini, xAI, OpenRouter and local
+OpenAI-compatible servers, or wraps a model's own CLI:
+
+```bash
+export MEMORY_JUDGE_A_CMD="python3 $PWD/funnel/judges/judge.py --provider anthropic --model <model>"
+```
+
 API keys come from your environment. Nothing in this kit stores one.
+
+**Going from the demo to real use?** Follow [docs/first-real-run.md](docs/first-real-run.md),
+and run `python3 funnel/memory.py doctor` at any point. It says in plain English what is set
+up and what is missing (`doctor --ping` also sends each model a one-line test).
 
 Paths are configurable: `MEMORY_ROOT` (funnel state), `VAULT_ROOT` (trusted vault, default
 `./vault`), `STAGING_ROOT` (default `./staging`) and `MEMORY_POLICY`.

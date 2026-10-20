@@ -15,4 +15,6 @@ for t in integration_phase0 test_batched_judges test_deadlock_policy test_retria
 done
 run funnel/tests/test_router.py
 run funnel/tests/test_safe_io_ancestor.py
+run funnel/tests/test_judge_adapter.py
+run funnel/tests/test_doctor.py
 [ "$fail" -eq 0 ] && echo "ALL PASSED" || { echo "SOME FAILED"; exit 1; }

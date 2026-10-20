@@ -83,13 +83,14 @@ never_promote_markers:
 judges:
   judge_a:
     cmd_env: MEMORY_JUDGE_A_CMD
-    example: "python3 examples/judge_stub.py"   # illustrative
+    example: "python3 funnel/judges/judge.py --provider anthropic --model <model>"   # illustrative
   judge_b:
     cmd_env: MEMORY_JUDGE_B_CMD
-    example: "python3 examples/judge_stub.py"
+    example: "python3 funnel/judges/judge.py --provider gemini --model <model>"
   tiebreak:
     cmd_env: MEMORY_TIEBREAK_CMD
-    example: "python3 examples/judge_stub.py"
+    example: "python3 funnel/judges/judge.py --provider openai --model <model>"
+    # offline dry run: "python3 examples/judge_stub.py" in every seat
 providers_example:
   provider_one:   {api_key_env: PROVIDER_ONE_API_KEY,   model: example-model-small}
   provider_two:   {api_key_env: PROVIDER_TWO_API_KEY,   model: example-model-medium}

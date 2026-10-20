@@ -10,8 +10,10 @@ set -u
 # Resolve install root from this script (portable across clones/worktrees).
 SCRIPT_DIR="$(cd "$(dirname "$(realpath "$0")")" && pwd)"
 MEM="$(cd "$SCRIPT_DIR/.." && pwd)"
-LOG="$MEM/ledger/triage-cron.log"
-mkdir -p "$MEM/ledger"
+# State (candidates, ledger) lives under MEMORY_ROOT when it is set, as memory.py does.
+STATE="${MEMORY_ROOT:-$MEM}"
+LOG="$STATE/ledger/triage-cron.log"
+mkdir -p "$STATE/ledger"
 ts() { date "+%Y-%m-%d %H:%M:%S"; }
 
 # The weekly command checks its own due date. No models are called on other days,
@@ -28,7 +30,7 @@ run_weekly_deadlocks() {
 # Cheap no-op when there is nothing to triage, still run locked maintenance
 # (recover stale processing + router-rebuild-if-dirty) as one quiet line.
 shopt -s nullglob
-cands=("$MEM/candidates"/*.yaml)
+cands=("$STATE/candidates"/*.yaml)
 if [ ${#cands[@]} -eq 0 ]; then
   echo "$(ts) no candidates; running maintain" >> "$LOG"
   "$MEM/bin/memory" maintain >> "$LOG" 2>&1 || true
