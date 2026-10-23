@@ -37,7 +37,7 @@ python3 funnel/tests/test_doctor.py
 | Pluggable judge commands | `test_batched_judges.py` | command split, prompt on stdin, unset command or bad output becomes invalid |
 | Batched judging | `test_batched_judges.py` | batch ids, untrusted data markers, fallback to single items, same outcome as unbatched |
 | Sensitivity tags | `memory.py` | tags are recorded and notify, but never park by themselves |
-| Team routing | `test_batched_judges.py`, `test_private_team_boundary.py` | off by default, positive scope allowlist, explicit absolute `MEMORY_TEAM_BIN`, deny lists, duplicate checks, private marker |
+| Team routing | `test_batched_judges.py`, `test_private_team_boundary.py` | off by default, positive scope allowlist, explicit absolute `MEMORY_TEAM_BIN`, deny lists, duplicate checks, private marker, whole-word titles, conditional summaries, distinct excerpts and stable fact hashes |
 | Redaction before models | `capture.py`, `test_batched_judges.py` | the extractor receives redacted title and body, including patterns added in the active policy; target-note text with a secret is withheld from judge prompts |
 | Symlink-safe writes | `capture.py`, `test_batched_judges.py`, `test_router.py` | symlinked sidecars (capture and reconcile), notify-pending, ledger file or directory, and router index output are refused and nothing is written through them |
 | Promotion commits | `test_batched_judges.py` | `MEMORY_GIT_COMMIT=1` makes one `promote: <ledger id>` commit in a temp git repo; a non-git vault does not break promotion |

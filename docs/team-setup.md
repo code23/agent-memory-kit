@@ -61,6 +61,9 @@ destination, so a fact about one client cannot land on another client's page by 
   on `PATH`). Even then only scopes you list in `team_share_scopes` in the registry are
   copied; anything unlisted is refused, and `team_exclude` can veto a listed slug. Mark
   private facts so they never leave the local memory.
+- Team submissions use a whole-word title, with the full fact as a summary only when
+  the title is shortened. The body contains the fact once and adds a source excerpt
+  only when it differs materially; source, type and client/project scope stay in tags.
 - If an agent works for one client, only give it the router index and notes for that
   client. The router can be restricted to a folder with `--allow-root`.
 - Do not mix clients in one proposal. One fact, one scope.

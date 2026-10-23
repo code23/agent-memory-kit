@@ -7,6 +7,7 @@ Run from repo root:
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import os
@@ -356,12 +357,13 @@ def main():
             if expect:
                 cmd = calls[0]
                 tags = cmd[cmd.index("--tags") + 1]
-                check("team: command shape", cmd[:2] == ["/opt/example/team-memory", "submit"] and len(cmd[cmd.index("--title") + 1]) == 120
-                      and len(cmd[cmd.index("--summary") + 1]) == 160 and "source:memory-triage" in tags
+                check("team: command shape", cmd[:2] == ["/opt/example/team-memory", "submit"]
+                      and cmd[cmd.index("--title") + 1] == "Northwind uses Sunday backups."
+                      and cmd[cmd.index("--summary") + 1] == c["fact"] and "source:memory-triage" in tags
                       and f"type:{ctype}" in tags and ("client:northwind" in tags if scope.startswith("client:") else True))
                 body = cmd[cmd.index("--body") + 1]
-                check("team: body has excerpt + provenance", "Backups run every Sunday" in body
-                      and "Source: memory triage," in body and f"scope {scope}" in body and f"type {ctype}" in body)
+                check("team: body has distinct excerpt without repeated metadata",
+                      body == c["fact"] + "\n\nSource excerpt: " + c["source"]["excerpt"])
                 check("team: log row has ids + parsed submission id",
                       rec["_log"][0]["ledger_id"] == lid and rec["_log"][0]["candidate_id"] == "cand-1"
                       and rec["_log"][0]["submission_id"] == "0b1c2d3e-aaaa-bbbb-cccc-000011112222"
@@ -426,6 +428,30 @@ def main():
 
     def reset():
         calls.clear(); searches.clear(); m._TEAM_SEEN_FACTS.clear()
+
+    short_fact = "The studio runs backups every Sunday."
+    long_fact = ("The studio runs backups every Sunday using a separate storage account with "
+                 "restricted access so project archives can be recovered after an outage.")
+    for label, fact, excerpt, expected_title, has_excerpt in (
+            ("short identical", short_fact, short_fact, short_fact, False),
+            ("short similar", short_fact, "The studio runs backups every Sunday!", short_fact, False),
+            ("short different", short_fact, "Archives are stored in a separate region.", short_fact, True),
+            ("long identical", long_fact, long_fact,
+             "The studio runs backups every Sunday using a separate storage account with restricted…", False),
+            ("oversized first word", "https://example.com/" + "a" * 110,
+             "https://example.com/" + "a" * 110,
+             ("https://example.com/" + "a" * 110)[:89] + "…", False)):
+        reset()
+        outcome, _ = route(cand(scope="org", ctype="decision", fact=fact), team_run, excerpt=excerpt)
+        check(f"team format {label}: submitted", outcome["status"] == "submitted", str(outcome))
+        cmd = calls[0]
+        check(f"team format {label}: whole-word title", cmd[cmd.index("--title") + 1] == expected_title)
+        check(f"team format {label}: summary only adds detail",
+              (cmd[cmd.index("--summary") + 1] == fact if expected_title != fact else "--summary" not in cmd))
+        check(f"team format {label}: fact once and distinct excerpt only",
+              cmd[cmd.index("--body") + 1] == fact + (f"\n\nSource excerpt: {excerpt}" if has_excerpt else ""))
+        check(f"team format {label}: stable fact hash",
+              outcome["fact_sha256"] == hashlib.sha256(m._team_norm_text(fact).encode("utf-8")).hexdigest())
 
     reset()
     out, _ = route(cand(scope="org", ctype="decision", fact="We used the Legacy build loop for releases."), team_run)

@@ -2684,7 +2684,7 @@ def team_route(c, src, scope):
         if not team_route_eligible(c, scope):
             return {"status": "skipped", "detail": "not eligible (scope/sensitivity/type)"}
         fact = " ".join(str(c.get("fact") or "").split())
-        sc = normalize_scope(str(scope))  # normalised form for body/tags only
+        sc = normalize_scope(str(scope))  # normalised form for tags only
         if sc is None:
             return {"status": "skipped", "detail": "scope not normalisable"}
         excerpt = str((src or {}).get("excerpt") or "").strip()
@@ -2704,15 +2704,26 @@ def team_route(c, src, scope):
         if dup_id:
             return {"status": "skipped", "detail": f"duplicate of live {dup_id}", "fact_sha256": fact_hash}
         ctype = str(c.get("type") or "")
-        day = datetime.date.today().isoformat()
-        body = (f"{fact}\n\nSource excerpt: {excerpt}\n\n"
-                f"Source: memory triage, {day}, scope {sc}, type {ctype}")
+        title = re.split(r"(?<=[.!?])\s+", fact, maxsplit=1)[0]
+        if len(title) > 100:
+            words = []
+            for word in title.split():
+                if len(" ".join(words + [word])) > 89:
+                    break
+                words.append(word)
+            title = (" ".join(words) if words else title[:89]) + "…"
+        body = fact
+        if excerpt and difflib.SequenceMatcher(
+                None, _team_norm_text(fact), _team_norm_text(excerpt)).ratio() < 0.9:
+            body += f"\n\nSource excerpt: {excerpt}"
         tags = []
         if sc.startswith("client:") or sc.startswith("project:"):
             tags.append(_slug_tag(sc))
         tags += [f"type:{_slug_tag(ctype)}", "source:memory-triage"]
-        cmd = [_team_bin(), "submit", "--title", fact[:120], "--summary", fact[:160],
+        cmd = [_team_bin(), "submit", "--title", title,
                "--body", body, "--tags", ",".join(tags)]
+        if title != fact:
+            cmd += ["--summary", fact]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=45,
                            stdin=subprocess.DEVNULL)
         if r.returncode != 0:
