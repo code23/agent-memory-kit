@@ -16,6 +16,8 @@ The candidate installer provisions a business memory service on its owner's Mac.
 
 Use a trusted operator account to maintain the software. Run unrestricted coding agents only in the separate coding account. A separate terminal, environment variable, Keychain label or container under one UID does not provide this boundary. Setup refuses the same account, root execution and software that the coding account can alter. It does not create Mac accounts or grant administrator permissions.
 
+The coding account must be standard, without administrator/root group membership, custom sudo rules or another way to assume the operator's identity. Administrator accounts remain trusted. Software and data must live on a filesystem that enforces ownership; volumes configured to ignore ownership are refused.
+
 The operator must remain logged in, with the required Keychain accessible, while the coding account uses the service. This is a user LaunchAgent, not a system daemon. Fast user switching and locked-Keychain behaviour need acceptance on the target Mac. A permanently logged-out operator is not a supported unattended arrangement.
 
 Keep the existing three-model YOLO workflow. Storage, access checks and lexical reads do not make inference calls; the coding and review workflow retains its model requirements.
