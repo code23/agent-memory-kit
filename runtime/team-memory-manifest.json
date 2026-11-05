@@ -1,0 +1,28 @@
+{
+  "formatVersion": 1,
+  "packageVersion": "0.1.0",
+  "nodeTarget": "node22",
+  "serviceFile": "team-memory-server.mjs",
+  "files": {
+    "team-memory-server.mjs": {
+      "sha256": "00777352aa33404838ff980761fc416e0f32fdf169923d1807a5eb9a18d882a0",
+      "bytes": 2422645
+    },
+    "team-memory-operator.mjs": {
+      "sha256": "2d5e1ed5ca6c12ecb00500bee93bb5e15bfc1649c123aea46924e271d7f73259",
+      "bytes": 2716970
+    },
+    "team-memory-bootstrap.mjs": {
+      "sha256": "29bd3e75b17f452900aa2b8b42a708775dd600ac25ec3789bcaecc93801e498e",
+      "bytes": 1036309
+    },
+    "team-memory-recovery.mjs": {
+      "sha256": "686995d1bd5a47baa202abbf0eae126614103495e5c8eb94c23282985df08645",
+      "bytes": 83956
+    },
+    "team-memory-verify.mjs": {
+      "sha256": "9e84e5ef28015b0523f2bc836c572c60ab7d82d5548634ceff29ff81ae5f6777",
+      "bytes": 4302
+    }
+  }
+}
