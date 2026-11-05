@@ -1,6 +1,6 @@
 # First Mac client release
 
-Status: implementation plan, not an installation approval.
+Status: installer implemented on the candidate branch, with native component evidence; not an installation approval. Follow [installer acceptance](installer-testing.md) for the required evidence and report. Complete two-account client use, secure handoff and protected recovery remain release gates.
 
 The public `code23/agent-memory-kit` repository stays the distribution and documentation home. Preserve its Git history and previous file-vault implementation while replacing the default onboarding only when the new path is actually installable. The client runs memory on their own Mac; no hosted deployment is implied.
 
