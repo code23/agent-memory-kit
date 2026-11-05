@@ -39,11 +39,18 @@ class ClientTests(unittest.TestCase):
         self.home.mkdir()
         self.home_patch = patch.object(client, "_home", return_value=self.home)
         self.home_patch.start()
+        self.account_patch = patch.object(client, "standard_coding_identity", return_value={"uid": os.getuid()})
+        self.account_patch.start()
+        self.native_home_patch = patch.dict(os.environ, {"CODEX_HOME": str(self.home / ".codex"),
+                                                        "CLAUDE_CONFIG_DIR": str(self.home / ".claude")})
+        self.native_home_patch.start()
         self.keychain = FakeKeychain()
         self.token = b"offline-fixture-agent-token"
 
     def tearDown(self):
         self.home_patch.stop()
+        self.account_patch.stop()
+        self.native_home_patch.stop()
         self.temporary.cleanup()
 
     def connect(self, **kwargs):
@@ -128,6 +135,61 @@ class ClientTests(unittest.TestCase):
         with self.assertRaisesRegex(client.ClientError, "logthis"):
             self.connect()
         self.assertEqual(self.tree(), before)
+        self.assertEqual(self.keychain.puts, [])
+
+    def test_all_explicit_capture_command_spellings_fail_closed(self):
+        path = self.project / "AGENTS.md"
+        for spelling in ("log this", "log-this", "log_this", "logthis"):
+            path.write_text("When I say " + spelling + ", save to another store.\n")
+            with self.subTest(spelling=spelling), self.assertRaises(client.ClientError):
+                self.connect()
+        self.assertEqual(self.keychain.puts, [])
+
+    def test_global_alternate_command_paths_refused_without_body_reads(self):
+        for relative in (".claude/skills/log-this", ".codex/prompts/log_this.md"):
+            path = self.home / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("private contents")
+            with self.subTest(relative=relative), self.assertRaises(client.ClientError):
+                self.connect()
+            path.unlink()
+        self.assertEqual(self.tree(), {})
+
+    def test_ancestor_routing_parent_binding_and_override_paths_refused(self):
+        (self.base / ".git").mkdir()
+        for relative, contents in (("AGENTS.md", "When I say log this, capture elsewhere."),
+                                    ("CLAUDE.local.md", "Use log-this elsewhere."),
+                                    (client.PROFILE_NAME, "{}"), ("AGENTS.override.md", "Other guidance")):
+            path = self.base / relative
+            path.write_text(contents)
+            with self.subTest(relative=relative), self.assertRaises(client.ClientError):
+                self.connect()
+            path.unlink()
+        self.assertEqual(self.keychain.puts, [])
+
+    def test_private_governing_instruction_existence_is_enough_without_reading(self):
+        path = self.base / "CLAUDE.md"
+        path.write_text("Private unrelated body must not be read.")
+        real_snapshot = client._snapshot
+        def scoped_snapshot(candidate):
+            self.assertNotEqual(candidate, path)
+            return real_snapshot(candidate)
+        with patch.object(client, "_snapshot", side_effect=scoped_snapshot), self.assertRaises(client.ClientError):
+            self.connect()
+        self.assertEqual(self.tree(), {})
+
+    def test_parent_binding_outside_selected_git_root_is_refused(self):
+        (self.project / ".git").mkdir()
+        (self.base / client.PROFILE_NAME).write_text("unread parent binding")
+        with self.assertRaises(client.ClientError):
+            self.connect()
+        self.assertEqual(self.keychain.puts, [])
+
+    def test_encoded_ancestor_credential_reference_is_refused(self):
+        (self.base / ".git").mkdir()
+        (self.base / ".mcp.json").write_text('{"mcpServers":{"helper":{"env":{"copy":"AGENT\\u005fMEMORY_TOKEN"}}}}')
+        with self.assertRaises(client.ClientError):
+            self.connect()
         self.assertEqual(self.keychain.puts, [])
 
     def test_existing_mcp_name_collision_preserves_all_data(self):
@@ -215,6 +277,23 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(client.ClientError):
                 self.connect(project=path)
 
+    def test_global_configuration_directories_and_children_refused(self):
+        for name in (".claude", ".codex", ".agents", ".config"):
+            path = self.home / name
+            path.mkdir()
+            child = path / "nested"
+            child.mkdir()
+            for candidate in (path, child):
+                with self.subTest(candidate=name), self.assertRaises(client.ClientError):
+                    self.connect(project=candidate)
+
+    def test_case_alias_identity_is_rejected_even_when_path_spelling_differs(self):
+        real_identity = client._identity
+        def identity(path):
+            return real_identity(self.home) if path == self.project else real_identity(path)
+        with patch.object(client, "_identity", side_effect=identity), self.assertRaises(client.ClientError):
+            self.connect()
+
     def test_secure_store_conflict_precedes_mutations(self):
         self.keychain.values[("fixture", "agent")] = b"different-fixture"
         with self.assertRaises(client.ClientError):
@@ -229,6 +308,15 @@ class ClientTests(unittest.TestCase):
                 self.connect()
         self.assertEqual(self.tree(), before)
         self.assertFalse((self.project / ".codex").exists())
+
+    def test_first_connect_stores_credential_before_profile_commit_point(self):
+        original_put = self.keychain.put
+        def check_order(*args):
+            self.assertFalse((self.project / client.PROFILE_NAME).exists())
+            original_put(*args)
+        with patch.object(self.keychain, "put", side_effect=check_order):
+            self.connect()
+        self.assertTrue((self.project / client.PROFILE_NAME).exists())
 
     def test_rollback_preserves_concurrent_user_edit(self):
         def fail(*args):
@@ -393,25 +481,16 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(path.read_text(), "concurrent user edit")
         self.assertEqual(self.keychain.get("fixture", "agent"), self.token)
 
-    def test_legacy_profile_upgrade_preserves_ordinary_edits_and_bound_scope(self):
+    def test_unshipped_legacy_profile_is_refused_without_rewriting_files(self):
         self.connect()
         path = self.project / client.PROFILE_NAME
         legacy = json.loads(path.read_text())
         legacy["version"] = 1
-        legacy["managed_hashes"] = {relative: client._digest((self.project / relative).read_bytes())
-                                    for relative in client._FILES}
         path.write_text(json.dumps(legacy))
-        with (self.project / "AGENTS.md").open("a") as handle:
-            handle.write("\nNew ordinary project guidance.\n")
-        with self.assertRaises(client.ClientError):
-            client.run(path, ["codex-yolo"], self.keychain)
         before = self.tree()
-        upgraded = self.connect()
-        self.assertEqual(upgraded["version"], 2)
-        self.assertEqual({key: value for key, value in self.tree().items() if key != client.PROFILE_NAME},
-                         {key: value for key, value in before.items() if key != client.PROFILE_NAME})
-        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
-            self.assertEqual(client.run(path, ["codex-yolo"], self.keychain), 0)
+        with self.assertRaises(client.ClientError):
+            self.connect()
+        self.assertEqual(before, self.tree())
 
     def test_managed_endpoint_or_token_reference_edit_cannot_be_rehashed_into_valid_scope(self):
         self.connect()
@@ -435,6 +514,68 @@ class ClientTests(unittest.TestCase):
             handle.write("\nUse another logthis workflow.\n")
         with self.assertRaises(client.ClientError):
             client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+
+    def test_unmanaged_servers_cannot_reuse_credential_even_with_encoded_references(self):
+        self.connect()
+        mcp_path = self.project / ".mcp.json"
+        before = mcp_path.read_text()
+        for section in ({"headers": {"Authorization": "Bearer ${AGENT_MEMORY_TOKEN}"}},
+                        {"env": {"copied": "AGENT_MEMORY_TOKEN"}}):
+            mcp = json.loads(before)
+            mcp["mcpServers"]["helper"] = section
+            mcp_path.write_text(json.dumps(mcp).replace("AGENT_MEMORY_TOKEN", "AGENT\\u005fMEMORY_TOKEN"))
+            with self.subTest(section=section), self.assertRaises(client.ClientError):
+                client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+        mcp_path.write_text(before)
+        path = self.project / ".codex/config.toml"
+        original = path.read_text()
+        for extra in ('\n[mcp_servers.helper]\nbearer_token_env_var = "AGENT_MEMORY_TOKEN"\n',
+                      '\n[mcp_servers.helper.env]\ncopy = "AGENT\\u005fMEMORY_TOKEN"\n',
+                      '\n# AGENT_MEMORY_TOKEN is referenced here\n'):
+            path.write_text(original + extra)
+            with self.subTest(extra=extra), self.assertRaises(client.ClientError):
+                client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+
+    def test_preflight_refuses_existing_binding_without_rekey_before_readiness(self):
+        self.connect()
+        with self.assertRaises(client.ClientError):
+            client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                    self.keychain, "fixture", os.getuid())
+        self.assertEqual(self.keychain.readiness_checks, 0)
+
+    def test_stale_lock_preflight_refuses_before_new_token_or_mutation(self):
+        (self.project / client._LOCK).write_text("stale lock fixture")
+        before = self.tree()
+        with self.assertRaises(client.ClientError):
+            client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                    self.keychain, "fixture", os.getuid())
+        self.assertEqual(self.tree(), before)
+        self.assertEqual(self.keychain.readiness_checks, 0)
+        self.assertEqual(self.keychain.puts, [])
+
+    def test_rollback_failure_continues_other_steps_and_preserves_original_error(self):
+        (self.project / "AGENTS.md").write_text("Original guidance\n")
+        real_replace = client._replace
+        def replace(path, expected, data):
+            if path.name == "AGENTS.md" and data == b"Original guidance\n":
+                raise OSError("ROLLBACK_FAILED")
+            return real_replace(path, expected, data)
+        with patch.object(client, "_replace", side_effect=replace), \
+             patch.object(self.keychain, "put", side_effect=RuntimeError("ORIGINAL_KEYCHAIN_FAILURE")):
+            with self.assertRaisesRegex(RuntimeError, "ORIGINAL_KEYCHAIN_FAILURE"):
+                self.connect()
+        self.assertFalse((self.project / ".mcp.json").exists())
+        self.assertFalse((self.project / "CLAUDE.md").exists())
+        self.assertFalse((self.project / client.PROFILE_NAME).exists())
+
+    def test_compare_and_swap_removal_preserves_a_newer_file(self):
+        path = self.project / "file"
+        path.write_text("installer")
+        expected = client._snapshot(path)
+        path.write_text("newer user edit")
+        with self.assertRaises(client.ClientError):
+            client._remove(path, expected)
+        self.assertEqual(path.read_text(), "newer user edit")
 
     def test_changed_managed_file_and_missing_keychain_fail_closed(self):
         self.connect()
@@ -483,7 +624,13 @@ class ClientTests(unittest.TestCase):
     def test_real_child_receives_only_scoped_environment_and_requested_exit_status(self):
         self.connect()
         argv = [sys.executable, "-c",
-                'import os,sys; assert os.environ.get("AGENT_MEMORY_TOKEN"); assert os.getcwd() == sys.argv[1]; sys.exit(13)',
+                'import os,sys,json,tomllib,pathlib; p=pathlib.Path.cwd(); '
+                'assert os.environ.get("AGENT_MEMORY_TOKEN"); assert str(p) == sys.argv[1]; '
+                'assert "business-fixture" in (p/"AGENTS.md").read_text(); '
+                'assert "business-fixture" in (p/"CLAUDE.md").read_text(); '
+                'assert json.loads((p/".mcp.json").read_text())["mcpServers"]["business-memory"]["url"] == "http://127.0.0.1:4237/mcp"; '
+                'assert tomllib.loads((p/".codex/config.toml").read_text())["mcp_servers"]["business-memory"]["bearer_token_env_var"] == "AGENT_MEMORY_TOKEN"; '
+                'sys.exit(13)',
                 str(self.project)]
         prior = os.environ.get(client.TOKEN_ENV)
         self.assertEqual(client.run(self.project / client.PROFILE_NAME, argv, self.keychain), 13)
@@ -521,6 +668,14 @@ class ClientTests(unittest.TestCase):
                                         self.keychain, "fixture", os.getuid())
         self.assertEqual(self.tree(), {})
         self.assertEqual(self.keychain.puts, [])
+
+    def test_connection_sink_preflight_rejects_privileged_coding_account(self):
+        with patch.object(client, "standard_coding_identity", side_effect=client.SecurityError("STANDARD_CODING_ACCOUNT_REQUIRED")):
+            with self.assertRaises(client.SecurityError):
+                client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                        self.keychain, "fixture", os.getuid())
+        self.assertEqual(self.tree(), {})
+        self.assertEqual(self.keychain.readiness_checks, 0)
 
     def test_connection_sink_preflight_existing_rotation_scope_and_instance(self):
         self.connect()

@@ -25,12 +25,33 @@ Project configuration references `AGENT_MEMORY_TOKEN`; the launch wrapper reads
 the agent credential from Keychain and sets that variable only in the child
 process environment. The nonsecret `.agent-memory.json` records the workspace,
 local service URL, Keychain instance name and managed region hashes. Version 2
-pins the business server object and the exact managed instruction/Codex blocks.
+checks the business server object and the exact managed instruction/Codex blocks.
 Ordinary edits elsewhere in these files remain usable. Changes to managed scope,
 authentication references or instruction blocks fail closed; restore those
-regions from reviewed project history. `connect` can upgrade an older version 1
-profile after validating the existing managed scope and matching its stored
-credential, preserving unrelated edits.
+regions from reviewed project history. The recorded hashes are redundant
+checksums of the validated managed regions. Version 1 was not released and is
+unsupported; there is no token-based legacy upgrade path.
+
+Both `log this` and `logthis` name the same existing entrypoint. The installer
+also refuses ambiguous `log-this` and `log_this` routing. These are explicit
+command-collision checks, not judgments about the meaning of arbitrary prose.
+Project/ancestor override paths, additional rule paths and inherited bindings
+need explicit review before binding. Governing instruction paths outside the
+selected repository are checked by existence; private bodies are not read.
+
+The load-path checks follow the official [Claude instruction documentation](https://code.claude.com/docs/en/memory)
+and [Codex instruction documentation](https://developers.openai.com/codex/guides/agents-md):
+Claude can load ancestor instructions; Codex uses the project instruction chain
+and gives `AGENTS.override.md` precedence. Codex project configuration must be
+trusted by the coding user before Codex will load it. These documented paths and
+the child fixture's working-directory/file checks are not a real-client loading
+or two-user acceptance test.
+
+Credential-variable reuse is refused in selected project and repository-ancestor
+client configuration outside the managed server. Existing global model settings
+are preserved and their private bodies are not inspected. This binding does not
+protect its agent credential from unrestricted code running as the same coding
+UID or from that user's independently configured global client behavior.
 
 ## Credential transfer across the two accounts
 
@@ -53,8 +74,9 @@ ssh -T -oBatchMode=yes -oStrictHostKeyChecking=yes <coding-user>@127.0.0.1 \
   '/absolute/path/memory-kit connect-check --project /absolute/project --workspace example-business --url http://127.0.0.1:47892/mcp --instance example-agent-1 --expected-uid <coding-uid>'
 ```
 
-The preflight checks the expected non-root UID, project/configuration binding and
-the default Keychain's unlocked read/write status. It makes no changes, receives
+The preflight checks the expected non-root UID, project/configuration binding,
+current standard-account membership and the default Keychain's unlocked
+read/write status. It makes no changes, receives
 no token and reads no secret item. It does not prove a future item's ACL permits
 access, and the Keychain can lock afterwards. The actual transfer must still
 succeed before the connection is usable.
@@ -93,9 +115,39 @@ workspace membership. A database rebuild must establish current membership and
 authorization before issuing replacement tokens; stale preserved tokens are not
 an authority source.
 
+An already connected project must use `connect-check --rekey` and a fresh
+instance before another mint. Ordinary edits need neither a token transfer nor
+reconnection; `run` checks the managed regions when launching.
+
 If storing the new credential fails, the old profile stays unchanged. If the
 profile commit fails after storage, an unused immutable Keychain item can remain;
 the old binding is preserved and the exact same in-memory transfer may be retried
 with that item. Concurrent user profile edits are preserved. If the token is no
 longer available through the authorized secure transfer, revoke it and mint a
 new token under another fresh instance instead of trying to recover it from logs.
+
+## Interrupted binding recovery
+
+An existing `.agent-memory-connect.lock` blocks preflight and launch. Do not mint
+another token while that lock or a partial binding remains. A killed installer
+can leave some managed blocks without a complete profile; handled errors attempt
+each rollback independently and preserve newer user edits. A failed rollback can
+therefore leave partial files even if the lock was removed. The original failure
+is reported; no automatic reset or deletion of unknown edits is performed.
+
+Confirm the known `connect`/`reconnect` terminal or session has stopped before
+handling its lock. If that cannot be established, keep the lock and obtain an
+explicit owner handoff. If it is stale, remove only that lock after review.
+Inspect the selected project's current diff locally without posting credentials
+or unrelated configuration. If its complete profile and managed regions remain
+intact, retry `run` after the stale lock is removed.
+
+If there is no complete profile, compare the partial state with the reviewed
+pre-install project revision. Remove only the exact `business-memory` server
+entry and marked business blocks introduced by this attempt, preserving every
+other key and line; do not reset whole files or delete directories. If a block
+has changed or its ownership is uncertain, keep the edits and obtain maintainer
+review instead. Revoke the failed transfer's server token by its nonsecret
+metadata/unique label. An unused immutable Keychain item may remain; choose a
+fresh instance for the next attempt. Rerun the nonsecret preflight only after
+the project diff is understood and the partial state is resolved.
