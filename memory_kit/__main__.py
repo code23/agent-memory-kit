@@ -26,11 +26,15 @@ def parser():
         command.add_argument("--root", required=True, type=Path)
         if name == "operator":
             command.add_argument("args", nargs=argparse.REMAINDER)
-    connect = commands.add_parser("connect")
-    connect.add_argument("--project", required=True, type=Path)
-    connect.add_argument("--workspace", required=True)
-    connect.add_argument("--url", required=True)
-    connect.add_argument("--instance", required=True)
+    for name in ("connect", "reconnect", "connect-check"):
+        connect = commands.add_parser(name)
+        connect.add_argument("--project", required=True, type=Path)
+        connect.add_argument("--workspace", required=True)
+        connect.add_argument("--url", required=True)
+        connect.add_argument("--instance", required=True)
+        if name == "connect-check":
+            connect.add_argument("--expected-uid", required=True, type=int)
+            connect.add_argument("--rekey", action="store_true")
     run = commands.add_parser("run")
     run.add_argument("--profile", required=True, type=Path)
     run.add_argument("args", nargs=argparse.REMAINDER)
@@ -43,16 +47,20 @@ def main(argv=None):
         return 1
     args = parser().parse_args(argv)
     try:
-        if args.command in ("connect", "run"):
+        if args.command in ("connect", "reconnect", "connect-check", "run"):
             from . import client
             from .keychain import MacKeychain
-            if args.command == "connect":
+            if args.command == "connect-check":
+                result = client.check_connection(args.project, args.workspace, args.url,
+                                                 MacKeychain(), args.instance, args.expected_uid,
+                                                 rekey=args.rekey)
+            elif args.command in ("connect", "reconnect"):
                 if sys.stdin.isatty():
                     raise host.HostError("Provide the agent credential through a secure input pipe")
                 token = sys.stdin.buffer.read(4097).strip()
                 if not token or len(token) > 4096:
                     raise host.HostError("Agent credential input is invalid")
-                client.connect(args.project, args.workspace, args.url, token, MacKeychain(), args.instance)
+                getattr(client, args.command)(args.project, args.workspace, args.url, token, MacKeychain(), args.instance)
                 result = {"connected": True}
             else:
                 native_args = args.args[1:] if args.args[:1] == ["--"] else args.args

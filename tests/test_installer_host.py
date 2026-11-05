@@ -1,5 +1,7 @@
 """Offline host lifecycle tests. No native Keychain, PostgreSQL or launchd calls."""
 import copy
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -10,6 +12,8 @@ import unittest
 from unittest.mock import patch
 
 from memory_kit import host
+from memory_kit import __main__ as cli
+from memory_kit import client
 
 REAL_PRIVATE_ROOT = host.security.assert_private_root
 REAL_NOT_WRITABLE = host.security.assert_not_agent_writable
@@ -141,6 +145,136 @@ class HostTests(unittest.TestCase):
         self.assertFalse(self.root.exists())
         self.private.assert_not_called()
 
+    def test_homebrew_version_suffix_is_accepted(self):
+        def versions(argv, **kwargs):
+            text = "v24.1.0" if str(argv[0]).endswith("/node") else "tool (PostgreSQL) 18.6 (Homebrew)"
+            return types.SimpleNamespace(returncode=0, stdout=text.encode(), stderr=b"")
+        with patch.object(host.platform, "system", return_value="Darwin"), \
+                patch.object(host.security, "coding_identity", return_value=self.identity), \
+                patch.object(host, "_tool", side_effect=lambda path, identity: str(path)), \
+                patch.object(host, "command", side_effect=versions):
+            result = host.plan("demo-team", "coding", self.root, "/opt/example/postgres/bin", "/opt/example/node", self.kit)
+        self.assertIsNone(result["existing"])
+        self.assertFalse(self.root.exists())
+
+    def test_tool_symlink_is_canonicalized_before_permission_check(self):
+        executable = self.base / "executable"
+        executable.write_text("#!/bin/sh\n")
+        executable.chmod(0o700)
+        link = self.base / "node-link"
+        link.symlink_to(executable)
+        result = host._tool(link, self.identity)
+        self.assertEqual(result, str(executable))
+        self.writable.assert_called_with(executable, self.identity)
+
+    def test_failed_software_copy_leaves_no_final_directory_and_resumes(self):
+        original = host._write_new
+        failed = False
+        def interrupted(path, payload):
+            nonlocal failed
+            if not failed and ".install-" in str(path) and path.name.endswith(".mjs"):
+                failed = True
+                raise OSError("simulated interrupted copy")
+            original(path, payload)
+        with patch.object(host, "_write_new", side_effect=interrupted):
+            with self.assertRaises(OSError):
+                host.install(self.preflight, self.store)
+        config = json.loads((self.root / "config.json").read_text())
+        self.assertFalse(host._software(config).exists())
+        self.assertEqual(list((self.root / "software").iterdir()), [])
+        self.preflight["existing"] = config
+        host.install(self.preflight, self.store)
+        self.assertTrue(host._software(config).exists())
+        self.assertEqual(len(self.store.writes), 4)
+
+    def test_node_children_use_only_private_unix_socket_transport(self):
+        config = self.install()
+        bootstrap = next(call for call in self.calls if any(arg.endswith("team-memory-bootstrap.mjs") for arg in call[0]))
+        env = bootstrap[1]["env"]
+        self.assertEqual(env["DATABASE_URL"], "postgresql:///agent_memory")
+        self.assertEqual(env["PGHOST"], str(self.root / "s"))
+        self.assertEqual(env["PGUSER"], "amk_bootstrap")
+        self.assertTrue(env["PGPASSWORD"])
+        starts = [call for call in self.calls if call[0][-1:] == ["start"]]
+        options = starts[0][0][starts[0][0].index("-o") + 1]
+        self.assertIn("-h ''", options)
+        self.assertIn("unix_socket_permissions=0700", options)
+        self.assertNotIn("127.0.0.1", options)
+        self.assertEqual((self.root / "s").stat().st_mode & 0o777, 0o700)
+
+    def test_explicit_locale_without_ambient_launchd_locale(self):
+        with patch.dict(os.environ, {}, clear=True):
+            env = host.clean_env()
+        self.assertEqual(env["LC_ALL"], "C")
+        self.assertEqual(env["LANG"], "C")
+
+    def test_stop_removes_owned_autostart_and_start_boots_out_stale_job(self):
+        config = self.install()
+        path = self.base / "LaunchAgents" / "owned.plist"
+        path.parent.mkdir()
+        path.write_bytes(plistlib.dumps(host._launch_payload(config)))
+        path.chmod(0o600)
+        with patch.object(host, "_plist_path", return_value=path), \
+                patch.object(host, "_coding_identity", return_value=self.identity):
+            host.stop(config)
+            self.assertFalse(path.exists())
+            self.calls.clear()
+            host.start(config)
+            commands = [argv[1] for argv, kwargs in self.calls if argv[0] == "/bin/launchctl"]
+            self.assertLess(commands.index("bootout"), commands.index("bootstrap"))
+            self.assertTrue(path.exists())
+
+    def test_start_creates_only_missing_launch_agents_directory(self):
+        config = self.install()
+        path = self.base / "NewLaunchAgents" / "owned.plist"
+        with patch.object(host, "_plist_path", return_value=path), \
+                patch.object(host, "_coding_identity", return_value=self.identity):
+            result = host.start(config)
+        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(result, {"service_loaded": True})
+        self.assertTrue(path.exists())
+
+    def test_cli_connect_check_is_nonsecret_json_and_never_reads_stdin(self):
+        output = io.StringIO()
+        expected = {"ready": True, "keychain_unlocked": True, "item_acl_verified": False}
+        stdin = types.SimpleNamespace(buffer=types.SimpleNamespace(read=lambda *_: self.fail("read-only check consumed stdin")),
+                                      isatty=lambda: self.fail("read-only check queried stdin"))
+        with patch.object(client, "check_connection", return_value=expected, create=True) as check, \
+                patch("memory_kit.keychain.MacKeychain", return_value=self.store), \
+                patch.object(cli.sys, "stdin", stdin), contextlib.redirect_stdout(output):
+            result = cli.main(["connect-check", "--project", str(self.base), "--workspace", "demo-team",
+                               "--url", "http://127.0.0.1:47892", "--instance", "demo-instance",
+                               "--expected-uid", str(self.uid), "--rekey"])
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(output.getvalue()), expected)
+        check.assert_called_once_with(self.base, "demo-team", "http://127.0.0.1:47892", self.store,
+                                      "demo-instance", self.uid, rekey=True)
+        self.assertEqual(len(output.getvalue().splitlines()), 1)
+
+    def test_cli_reconnect_consumes_token_only_from_stdin(self):
+        output = io.StringIO()
+        token = b"kmt_" + b"a" * 43
+        stdin = types.SimpleNamespace(buffer=io.BytesIO(token + b"\n"), isatty=lambda: False)
+        with patch.object(client, "reconnect", return_value={}) as reconnect, \
+                patch("memory_kit.keychain.MacKeychain", return_value=self.store), \
+                patch.object(cli.sys, "stdin", stdin), contextlib.redirect_stdout(output):
+            result = cli.main(["reconnect", "--project", str(self.base), "--workspace", "demo-team",
+                               "--url", "http://127.0.0.1:47892", "--instance", "new-instance"])
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(output.getvalue()), {"connected": True})
+        reconnect.assert_called_once_with(self.base, "demo-team", "http://127.0.0.1:47892", token, self.store, "new-instance")
+        self.assertNotIn(token.decode(), output.getvalue())
+
+    def test_invalid_runtime_workspace_refuses_before_any_io(self):
+        for value in ("a", "my_team", "a" * 32):
+            with self.subTest(value=value):
+                with patch.object(host.platform, "system", return_value="Darwin"):
+                    with self.assertRaises(host.security.SecurityError):
+                        host.plan(value, "coding", self.root, kit=self.kit)
+        self.assertEqual(self.calls, [])
+        self.private.assert_not_called()
+        self.assertFalse(self.root.exists())
+
     def test_install_credentials_never_in_argv_or_files(self):
         config = self.install()
         self.assertEqual(config["phase"], "installed")
@@ -153,7 +287,7 @@ class HostTests(unittest.TestCase):
                 if file.is_file():
                     self.assertNotIn(password, file.read_bytes())
         initdb = next(call for call in self.calls if Path(call[0][0]).name == "initdb")
-        self.assertIn("--pwfile=-", initdb[0])
+        self.assertIn("--pwfile=/dev/stdin", initdb[0])
         self.assertIn("--auth-host=scram-sha-256", initdb[0])
         sql = next(call for call in self.calls if Path(call[0][0]).name == "psql")
         self.assertIn("PGPASSWORD", sql[1]["env"])
@@ -219,7 +353,7 @@ class HostTests(unittest.TestCase):
         agent_dir.mkdir()
         path = agent_dir / (host.label(config) + ".plist")
         args = [config["python"], "-I", str(host._software(config) / "memory-kit"), "daemon", "--root", config["root"]]
-        path.write_bytes(plistlib.dumps({"Label": host.label(config), "ProgramArguments": args}))
+        path.write_bytes(plistlib.dumps(host._launch_payload(config)))
         os.chmod(str(path), 0o600)
         with patch.object(host, "_plist_path", return_value=path):
             result = host.uninstall(config)

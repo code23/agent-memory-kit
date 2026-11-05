@@ -11,6 +11,8 @@ from pathlib import Path
 import platform
 import plistlib
 import pwd
+import re
+import shlex
 import secrets
 import shutil
 import signal
@@ -19,7 +21,7 @@ import stat
 import subprocess
 import sys
 import uuid
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from . import security
 from .keychain import MacKeychain
@@ -45,6 +47,8 @@ def clean_env(extra=None):
     account = pwd.getpwuid(os.getuid())
     env.update(HOME=account.pw_dir, USER=account.pw_name, LOGNAME=account.pw_name)
     env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
     if extra:
         env.update(extra)
     return env
@@ -87,6 +91,7 @@ def _save_config(path, config, uid):
 
 def _free_port(port):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             listener.bind(("127.0.0.1", port))
         except OSError:
@@ -117,6 +122,7 @@ def _tool(path, identity):
     path = Path(path)
     if not path.is_absolute() or not path.is_file() or not os.access(str(path), os.X_OK):
         raise HostError("An explicit executable path is unavailable")
+    path = path.resolve(strict=True)
     security.assert_not_agent_writable(path, identity)
     return str(path)
 
@@ -158,12 +164,13 @@ def plan(workspace, coding_user, root=None, pg_bin=None, node=None, kit=None):
     kit = Path(kit or Path(__file__).resolve().parent.parent)
     root = Path(root) if root is not None else default_root(workspace)
     security.assert_private_root(root, kit, uid)
+    _check_socket_path(root)
     if root.exists() and not (root / "config.json").exists() and any(root.iterdir()):
         raise HostError("Refusing an unmarked nonempty installation directory")
     for file in _source_files(kit):
         security.assert_not_agent_writable(file, identity)
     node_path = _tool(node or shutil.which("node") or "", identity)
-    pg_dir = Path(pg_bin) if pg_bin else Path(shutil.which("initdb") or "").parent
+    pg_dir = (Path(pg_bin) if pg_bin else Path(shutil.which("initdb") or "").parent).resolve()
     pg_tools = {name: _tool(pg_dir / name, identity)
                 for name in ("initdb", "pg_ctl", "psql", "postgres")}
     python = _tool(Path(sys.executable).resolve(), identity)
@@ -172,7 +179,7 @@ def plan(workspace, coding_user, root=None, pg_bin=None, node=None, kit=None):
         raise HostError("Node.js 24 is required; install prerequisites separately")
     for name in ("initdb", "pg_ctl", "psql", "postgres"):
         version = command([pg_tools[name], "--version"]).stdout.decode().strip()
-        if not version.rsplit(" ", 1)[-1].startswith("18."):
+        if not re.search(r"\(PostgreSQL\) 18\.[0-9]+(?:\s|$)", version):
             raise HostError("PostgreSQL 18 tools are required")
     command([node_path, kit / "runtime/team-memory-verify.mjs"])
     digest = software_hash(kit)
@@ -186,7 +193,6 @@ def plan(workspace, coding_user, root=None, pg_bin=None, node=None, kit=None):
         # Never operate against a cluster that might still be serving requests.
         if _pg_status(existing).returncode == 0:
             raise HostError("Stop this instance before installing again")
-    _free_port(PG_PORT)
     _free_port(SERVICE_PORT)
     return {"workspace": workspace, "coding_uid": identity["uid"], "owner_uid": uid,
             "root": str(root), "pg_bin": str(pg_dir), "node": node_path,
@@ -231,15 +237,45 @@ def _start_pg(config):
     data = root / "postgres"
     security.ensure_private_directory(data, config["owner_uid"])
     _cluster_signature(config)
-    _free_port(PG_PORT)
+    socket_dir = _socket_directory(config, create=True)
     # /dev/null prevents query/error text from becoming a persistent secret-bearing log.
     _pg(config, "-w", "-t", "30", "-l", "/dev/null", "-o",
-        "-h 127.0.0.1 -p %d -k '' -c logging_collector=off -c log_statement=none -c log_min_messages=panic -c log_min_error_statement=panic" % PG_PORT,
+        "-h '' -p %d -k %s -c unix_socket_permissions=0700 -c logging_collector=off -c log_statement=none -c log_min_messages=panic -c log_min_error_statement=panic" % (PG_PORT, shlex.quote(str(socket_dir))),
         "start")
 
 
-def _dsn(role, password):
-    return "postgresql://%s:%s@127.0.0.1:%d/%s" % (role, password, PG_PORT, DATABASE)
+def _check_socket_path(root):
+    # Darwin sockaddr_un.sun_path is 104 bytes, including its trailing NUL.
+    if len(os.fsencode(str(Path(root) / "s" / (".s.PGSQL.%d" % PG_PORT)))) >= 104:
+        raise HostError("Installation path is too long for a private macOS socket; select a shorter root")
+
+
+def _socket_directory(config, create=False):
+    path = Path(config["root"]) / "s"
+    _check_socket_path(config["root"])
+    if create:
+        security.ensure_private_directory(path, config["owner_uid"])
+    else:
+        security.assert_private_root(path, _software(config), config["owner_uid"])
+    return path
+
+
+def _dsn(config, role, password):
+    return "postgresql://%s:%s@localhost:%d/%s?%s" % (
+        role, password, PG_PORT, DATABASE, urlencode({"host": str(_socket_directory(config))}))
+
+
+def _database_env(config, dsn):
+    """Translate the validated full URI to this bundled driver's Unix-socket contract.
+
+    postgres.js does not honor libpq's ?host=/socket URI option. An empty URI
+    hostname selects PGHOST, which its parser translates to a Unix socket path.
+    No credential or TCP hostname is passed in DATABASE_URL.
+    """
+    parsed = urlsplit(dsn)
+    return {"DATABASE_URL": "postgresql:///" + DATABASE,
+            "PGHOST": str(_socket_directory(config)), "PGPORT": str(PG_PORT),
+            "PGUSER": parsed.username, "PGPASSWORD": parsed.password}
 
 
 def credential(config, key, keychain=None):
@@ -249,9 +285,11 @@ def credential(config, key, keychain=None):
     try:
         text = value.decode("ascii")
         parsed = urlsplit(text)
-        if (parsed.scheme != "postgresql" or parsed.hostname != "127.0.0.1" or
+        if (parsed.scheme != "postgresql" or parsed.hostname != "localhost" or
                 parsed.port != PG_PORT or parsed.path != "/" + DATABASE or
-                parsed.username != ROLES[key] or not parsed.password or
+                parsed.username != ROLES[key] or parsed.fragment or
+                parse_qs(parsed.query, strict_parsing=True) != {"host": [str(_socket_directory(config))]} or
+                not parsed.password or
                 len(parsed.password) != 64 or any(c not in "0123456789abcdef" for c in parsed.password)):
             raise ValueError()
     except (ValueError, UnicodeError, KeyError):
@@ -261,7 +299,7 @@ def credential(config, key, keychain=None):
 
 def _psql(config, password, database, sql):
     return command([Path(config["pg_bin"]) / "psql", "-X", "--no-password",
-                    "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-p", str(PG_PORT),
+                    "-v", "ON_ERROR_STOP=1", "-h", str(_socket_directory(config)), "-p", str(PG_PORT),
                     "-U", ROLES["bootstrap"], "-d", database],
                    input=sql.encode(), env={"PGPASSWORD": password})
 
@@ -291,7 +329,7 @@ def _bootstrap(config, secrets_by_role):
              "--workspace", config["workspace"], "--name", config["workspace"],
              "--owner", config["owner_id"], "--reader-role", ROLES["reader"],
              "--submitter-role", ROLES["submitter"], "--operator-role", ROLES["operator"]],
-            env={"DATABASE_URL": secrets_by_role["bootstrap"]})
+            env=_database_env(config, secrets_by_role["bootstrap"]))
 
 
 def _copy_software(kit, config):
@@ -302,14 +340,21 @@ def _copy_software(kit, config):
         if software_hash(destination) != config["software_hash"]:
             raise HostError("Installed software differs from its recorded version")
         return
-    security.ensure_private_directory(destination, config["owner_uid"])
-    for file in _source_files(kit):
-        target = destination / file.relative_to(kit)
-        security.ensure_private_directory(target.parent, config["owner_uid"])
-        _write_new(target, file.read_bytes())
-    if software_hash(destination) != config["software_hash"]:
-        raise HostError("Installed software verification failed")
-    command([config["node"], destination / "runtime/team-memory-verify.mjs"])
+    # A failed or interrupted copy never occupies the final, versioned directory.
+    staging = destination.parent / (".install-" + secrets.token_hex(16))
+    security.ensure_private_directory(staging, config["owner_uid"])
+    try:
+        for file in _source_files(kit):
+            target = staging / file.relative_to(kit)
+            security.ensure_private_directory(target.parent, config["owner_uid"])
+            _write_new(target, file.read_bytes())
+        if software_hash(staging) != config["software_hash"]:
+            raise HostError("Installed software verification failed")
+        command([config["node"], staging / "runtime/team-memory-verify.mjs"])
+        os.rename(str(staging), str(destination))
+    finally:
+        if staging.exists():
+            shutil.rmtree(str(staging))
 
 
 def install(preflight, keychain=None):
@@ -348,7 +393,7 @@ def install(preflight, keychain=None):
             if keychain.get(config["instance"], profile) is None:
                 if config["phase"] != "prepared":
                     raise HostError("Existing credentials are missing; restore through recovery")
-                keychain.put(config["instance"], profile, _dsn(role, secrets.token_hex(32)).encode())
+                keychain.put(config["instance"], profile, _dsn(config, role, secrets.token_hex(32)).encode())
             values[profile] = credential(config, profile, keychain)
         _copy_software(kit, config)
         data = root / "postgres"
@@ -357,7 +402,7 @@ def install(preflight, keychain=None):
                 raise HostError("Existing database is missing; restore through recovery")
             command([Path(config["pg_bin"]) / "initdb", "-D", data, "--encoding=UTF8",
                      "--auth-local=scram-sha-256", "--auth-host=scram-sha-256",
-                     "--username=" + ROLES["bootstrap"], "--pwfile=-"],
+                     "--username=" + ROLES["bootstrap"], "--pwfile=/dev/stdin"],
                     input=(urlsplit(values["bootstrap"]).password + "\n").encode())
         elif not (data / "PG_VERSION").exists():
             raise HostError("Partial database initialization requires operator recovery")
@@ -411,54 +456,60 @@ def _launch_target(config):
     return "gui/%d/%s" % (config["owner_uid"], label(config))
 
 
-def start(config):
-    _free_port(SERVICE_PORT)
-    _free_port(PG_PORT)
+def _launch_payload(config):
+    return {"Label": label(config), "ProgramArguments": [config["python"], "-I",
+            str(_software(config) / "memory-kit"), "daemon", "--root", config["root"]],
+            "RunAtLoad": True, "KeepAlive": False,
+            "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"}
+
+
+def _matching_plist(config):
     path = _plist_path(config)
-    # Do not chmod an existing standard macOS LaunchAgents directory.
-    if not path.parent.is_dir() or path.parent.is_symlink():
-        raise HostError("Create the operator LaunchAgents directory before starting")
-    identity = _coding_identity(config)
-    security.assert_not_agent_writable(path.parent, identity)
-    payload = plistlib.dumps({"Label": label(config), "ProgramArguments": [config["python"], "-I",
-                            str(_software(config) / "memory-kit"), "daemon", "--root", config["root"]],
-                            "RunAtLoad": True, "KeepAlive": False,
-                            "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null"})
-    if path.exists():
+    if path.exists() or path.is_symlink():
         _private_file(path, config["owner_uid"])
-        if path.read_bytes() != payload:
+        if plistlib.loads(path.read_bytes()) != _launch_payload(config):
             raise HostError("An existing launch agent does not match this instance")
-    else:
-        _write_new(path, payload)
+    return path
+
+
+def start(config):
+    path = _matching_plist(config)
+    if not path.parent.exists():
+        security.ensure_private_directory(path.parent, config["owner_uid"])
+    if not path.parent.is_dir() or path.parent.is_symlink():
+        raise HostError("The operator LaunchAgents path is not a real directory")
+    security.assert_not_agent_writable(path.parent, _coding_identity(config))
+    # A completed or crashed launchd job remains loaded. Drain that exact label
+    # before bootstrapping; start also safely restarts an already running job.
+    stop(config)
+    _free_port(SERVICE_PORT)
+    _write_new(path, plistlib.dumps(_launch_payload(config)))
     command(["/bin/launchctl", "bootstrap", "gui/%d" % config["owner_uid"], path])
-    return {"started": True}
+    return {"service_loaded": True}
 
 
 def status(config):
     result = command(["/bin/launchctl", "print", _launch_target(config)], check=False)
     return {"service_loaded": result.returncode == 0,
-            "postgres_running": _pg_status(config).returncode == 0}
+            "postgres_running": _pg_status(config).returncode == 0,
+            "starts_at_login": _matching_plist(config).exists()}
 
 
 def stop(config):
+    path = _matching_plist(config)
     loaded = command(["/bin/launchctl", "print", _launch_target(config)], check=False)
     if loaded.returncode == 0:
         command(["/bin/launchctl", "bootout", _launch_target(config)])
     if _pg_status(config).returncode == 0:
         _pg(config, "-w", "-t", "30", "-m", "fast", "stop")
-    return {"stopped": True, "data_preserved": True}
+    # Explicit stop persists across login. Only start recreates RunAtLoad.
+    if path.exists():
+        path.unlink()
+    return {"stopped": True, "data_preserved": True, "starts_at_login": False}
 
 
 def uninstall(config):
     stop(config)
-    path = _plist_path(config)
-    if path.exists():
-        _private_file(path, config["owner_uid"])
-        value = plistlib.loads(path.read_bytes())
-        if value.get("Label") != label(config) or value.get("ProgramArguments", []) != [
-                config["python"], "-I", str(_software(config) / "memory-kit"), "daemon", "--root", config["root"]]:
-            raise HostError("Launch agent does not match this instance")
-        path.unlink()
     software = _software(config)
     security.ensure_private_directory(software, config["owner_uid"])
     if software_hash(software) != config["software_hash"]:
@@ -480,7 +531,7 @@ def daemon(config, keychain=None):
     try:
         child = subprocess.Popen([config["node"], str(_software(config) / "runtime/team-memory-server.mjs"),
                                   "--allow-submissions"],
-                                 env=clean_env({"DATABASE_URL": dsn, "PORT": str(SERVICE_PORT)}),
+                                 env=clean_env(dict(_database_env(config, dsn), PORT=str(SERVICE_PORT))),
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return child.wait()
     finally:
@@ -504,6 +555,6 @@ def operator(config, argv, keychain=None):
         raise HostError("Token creation requires a secure output pipe")
     # Never accept operator identity/DSN overrides from the caller or ambient environment.
     return command([config["node"], _software(config) / "runtime/team-memory-operator.mjs", *argv],
-                   env={"DATABASE_URL": credential(config, "operator", keychain),
-                        "MEMORY_OPERATOR_USER_ID": config["owner_id"]},
+                   env=dict(_database_env(config, credential(config, "operator", keychain)),
+                            MEMORY_OPERATOR_USER_ID=config["owner_id"]),
                    capture=False, check=False).returncode
