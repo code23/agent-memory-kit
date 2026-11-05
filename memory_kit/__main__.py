@@ -1,9 +1,9 @@
 """Human management CLI. Never print config, credentials or driver exceptions."""
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
+sys.dont_write_bytecode = True
 
 from . import host
 from .client import ClientError
@@ -76,7 +76,7 @@ def main(argv=None):
                           "postgres_port": host.PG_PORT, "service_port": host.SERVICE_PORT,
                           "changes_made": False}
         else:
-            config = host.load(args.root)
+            config = host.load(args.root, runtime=args.command not in ("stop", "status", "uninstall"))
             if args.command == "operator":
                 runtime_args = args.args[1:] if args.args[:1] == ["--"] else args.args
                 return host.operator(config, runtime_args)

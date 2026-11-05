@@ -20,6 +20,7 @@ import socket
 import stat
 import subprocess
 import sys
+from types import SimpleNamespace
 import uuid
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -118,8 +119,20 @@ def software_hash(kit):
     return digest.hexdigest()
 
 
-def _tool(path, identity):
+def _protect_selector(path, identity):
     path = Path(path)
+    if not path.is_absolute():
+        raise HostError("Tool selectors must be absolute paths")
+    # Protect every symlink entry before resolving it: a safe target alone does
+    # not establish that the coding account cannot replace the selector.
+    for component in reversed((path,) + tuple(path.parents)):
+        if component.is_symlink():
+            security.assert_not_agent_writable(component.parent.resolve(strict=True), identity)
+    return path
+
+
+def _tool(path, identity):
+    path = _protect_selector(path, identity)
     if not path.is_absolute() or not path.is_file() or not os.access(str(path), os.X_OK):
         raise HostError("An explicit executable path is unavailable")
     path = path.resolve(strict=True)
@@ -152,7 +165,7 @@ def _read_config(root, kit, uid):
     return config
 
 
-def plan(workspace, coding_user, root=None, pg_bin=None, node=None, kit=None):
+def plan(workspace, coding_user, root=None, pg_bin=None, node=None, kit=None, keychain=None):
     """Read-only preflight. No directories, accounts, credentials or services created."""
     if platform.system() != "Darwin":
         raise HostError("The host installer requires macOS")
@@ -169,11 +182,16 @@ def plan(workspace, coding_user, root=None, pg_bin=None, node=None, kit=None):
         raise HostError("Refusing an unmarked nonempty installation directory")
     for file in _source_files(kit):
         security.assert_not_agent_writable(file, identity)
-    node_path = _tool(node or shutil.which("node") or "", identity)
-    pg_dir = (Path(pg_bin) if pg_bin else Path(shutil.which("initdb") or "").parent).resolve()
+    node_selector = str(node or shutil.which("node") or "")
+    pg_selector = Path(pg_bin) if pg_bin else Path(shutil.which("initdb") or "").parent
+    _protect_selector(pg_selector, identity)
+    pg_dir = pg_selector.resolve(strict=True)
+    security.assert_not_agent_writable(pg_dir, identity)
+    node_path = _tool(node_selector, identity)
     pg_tools = {name: _tool(pg_dir / name, identity)
                 for name in ("initdb", "pg_ctl", "psql", "postgres")}
-    python = _tool(Path(sys.executable).resolve(), identity)
+    python_selector = str(Path(sys.executable))
+    python = _tool(python_selector, identity)
     version = command([node_path, "--version"]).stdout.decode().strip()
     if not version.startswith("v24."):
         raise HostError("Node.js 24 is required; install prerequisites separately")
@@ -187,16 +205,20 @@ def plan(workspace, coding_user, root=None, pg_bin=None, node=None, kit=None):
     if (root / "config.json").exists():
         existing = _read_config(root, kit, uid)
         if (existing["workspace"] != workspace or existing["coding_uid"] != identity["uid"] or
-                existing["node"] != node_path or existing["pg_bin"] != str(pg_dir) or
-                existing["software_hash"] != digest or existing["python"] != python):
+                existing.get("node_selector", existing["node"]) != node_selector or
+                existing.get("pg_selector", existing["pg_bin"]) != str(pg_selector) or
+                existing["software_hash"] != digest):
             raise HostError("Installation identity or version differs; upgrades require a recovery-backed release")
         # Never operate against a cluster that might still be serving requests.
         if _pg_status(existing).returncode == 0:
             raise HostError("Stop this instance before installing again")
     _free_port(SERVICE_PORT)
+    (keychain or MacKeychain()).check_ready()
     return {"workspace": workspace, "coding_uid": identity["uid"], "owner_uid": uid,
             "root": str(root), "pg_bin": str(pg_dir), "node": node_path,
-            "python": python, "software_hash": digest, "existing": existing,
+            "python": python, "node_selector": node_selector, "pg_selector": str(pg_selector),
+            "python_selector": python_selector, "pg_tools": pg_tools,
+            "software_hash": digest, "existing": existing,
             "kit": str(kit)}
 
 
@@ -205,19 +227,44 @@ def _software(config):
 
 
 def _pg(config, *args, check=True):
-    return command([Path(config["pg_bin"]) / "pg_ctl", "-D", Path(config["root"]) / "postgres", *args],
+    return command([config.get("pg_tools", {}).get("pg_ctl", str(Path(config["pg_bin"]) / "pg_ctl")), "-D", Path(config["root"]) / "postgres", *args],
                    check=check)
 
 
 def _pg_status(config):
-    if (Path(config["root"]) / "postgres").exists():
-        _cluster_signature(config)
-    return _pg(config, "status", check=False)
+    data = Path(config["root"]) / "postgres"
+    security.assert_private_root(data, Path(__file__).resolve().parent.parent, config["owner_uid"])
+    if not (data / "postmaster.pid").exists():
+        return SimpleNamespace(returncode=3)
+    _private_file(data / "postmaster.pid", config["owner_uid"])
+    try:
+        identity = _coding_identity(config)
+        selector = Path(config.get("pg_selector", config["pg_bin"]))
+        binary = _tool(selector / "pg_ctl", identity)
+        version = command([binary, "--version"]).stdout.decode()
+        if not re.search(r"\(PostgreSQL\) 18\.[0-9]+(?:\s|$)", version):
+            raise HostError("PostgreSQL 18 tools are required")
+        local = dict(config, pg_tools={"pg_ctl": binary})
+        return _pg(local, "status", check=False)
+    except (HostError, security.SecurityError, OSError):
+        # Unknown is distinct from stopped; no unverified PID signaling.
+        return SimpleNamespace(returncode=4)
+
+
+def _stop_owned_pg(config):
+    result = _pg_status(config)
+    if result.returncode == 4:
+        raise HostError("PostgreSQL tools are unavailable; restore PostgreSQL 18 to stop the owned cluster")
+    if result.returncode == 0:
+        selector = Path(config.get("pg_selector", config["pg_bin"]))
+        binary = _tool(selector / "pg_ctl", _coding_identity(config))
+        _pg(dict(config, pg_tools={"pg_ctl": binary}), "-w", "-t", "30", "-m", "fast", "stop")
 
 
 def _cluster_signature(config):
     data = Path(config["root"]) / "postgres"
-    security.assert_private_root(data, _software(config), config["owner_uid"])
+    security.assert_private_root(data, Path(__file__).resolve().parent.parent, config["owner_uid"])
+    _private_file(data / ".amk-initdb-complete", config["owner_uid"])
     _private_file(data / "PG_VERSION", config["owner_uid"])
     if (data / "PG_VERSION").read_text().strip() != "18":
         raise HostError("Owned PostgreSQL data version differs")
@@ -233,7 +280,7 @@ def _cluster_signature(config):
 
 def _start_pg(config):
     root = Path(config["root"])
-    security.assert_private_root(root, _software(config), config["owner_uid"])
+    security.assert_private_root(root, Path(__file__).resolve().parent.parent, config["owner_uid"])
     data = root / "postgres"
     security.ensure_private_directory(data, config["owner_uid"])
     _cluster_signature(config)
@@ -256,7 +303,7 @@ def _socket_directory(config, create=False):
     if create:
         security.ensure_private_directory(path, config["owner_uid"])
     else:
-        security.assert_private_root(path, _software(config), config["owner_uid"])
+        security.assert_private_root(path, Path(__file__).resolve().parent.parent, config["owner_uid"])
     return path
 
 
@@ -298,7 +345,7 @@ def credential(config, key, keychain=None):
 
 
 def _psql(config, password, database, sql):
-    return command([Path(config["pg_bin"]) / "psql", "-X", "--no-password",
+    return command([config.get("pg_tools", {}).get("psql", str(Path(config["pg_bin"]) / "psql")), "-X", "--no-password",
                     "-v", "ON_ERROR_STOP=1", "-h", str(_socket_directory(config)), "-p", str(PG_PORT),
                     "-U", ROLES["bootstrap"], "-d", database],
                    input=sql.encode(), env={"PGPASSWORD": password})
@@ -360,6 +407,7 @@ def _copy_software(kit, config):
 def install(preflight, keychain=None):
     """Install/resume only a preflighted matching instance; never delete its database."""
     keychain = keychain or MacKeychain()
+    keychain.check_ready()
     root, kit = Path(preflight["root"]), Path(preflight["kit"])
     uid = preflight["owner_uid"]
     security.assert_private_root(root, kit, uid)
@@ -384,10 +432,17 @@ def install(preflight, keychain=None):
         else:
             config = {key: preflight[key] for key in ("workspace", "coding_uid", "owner_uid", "root",
                                                        "pg_bin", "node", "python", "software_hash")}
+            for key in ("node_selector", "pg_selector", "python_selector", "pg_tools"):
+                if key in preflight:
+                    config[key] = preflight[key]
             config.update(format=1, instance=str(uuid.uuid4()), pg_port=PG_PORT,
                           service_port=SERVICE_PORT, database=DATABASE, phase="prepared")
             config["owner_id"] = "owner-" + config["instance"]
             _save_config(root / "config.json", config, uid)
+        for key in ("node", "python", "pg_bin", "pg_tools"):
+            if key in preflight:
+                config[key] = preflight[key]
+        _copy_software(kit, config)
         values = {}
         for profile, role in ROLES.items():
             if keychain.get(config["instance"], profile) is None:
@@ -395,20 +450,29 @@ def install(preflight, keychain=None):
                     raise HostError("Existing credentials are missing; restore through recovery")
                 keychain.put(config["instance"], profile, _dsn(config, role, secrets.token_hex(32)).encode())
             values[profile] = credential(config, profile, keychain)
-        _copy_software(kit, config)
         data = root / "postgres"
         if not data.exists():
             if config["phase"] != "prepared":
                 raise HostError("Existing database is missing; restore through recovery")
-            command([Path(config["pg_bin"]) / "initdb", "-D", data, "--encoding=UTF8",
-                     "--auth-local=scram-sha-256", "--auth-host=scram-sha-256",
-                     "--username=" + ROLES["bootstrap"], "--pwfile=/dev/stdin"],
-                    input=(urlsplit(values["bootstrap"]).password + "\n").encode())
-        elif not (data / "PG_VERSION").exists():
+            staging_data = root / (".initdb-" + secrets.token_hex(16))
+            try:
+                command([config.get("pg_tools", {}).get("initdb", str(Path(config["pg_bin"]) / "initdb")),
+                         "-D", staging_data, "--encoding=UTF8",
+                         "--auth-local=scram-sha-256", "--auth-host=scram-sha-256",
+                         "--username=" + ROLES["bootstrap"], "--pwfile=/dev/stdin"],
+                        input=(urlsplit(values["bootstrap"]).password + "\n").encode())
+                security.ensure_private_directory(staging_data, uid)
+                _write_new(staging_data / ".amk-initdb-complete", b"1\n")
+                os.rename(str(staging_data), str(data))
+            finally:
+                if staging_data.exists():
+                    shutil.rmtree(str(staging_data))
+        elif not (data / ".amk-initdb-complete").is_file():
             raise HostError("Partial database initialization requires operator recovery")
         security.ensure_private_directory(data, uid)
         config["cluster_config"] = _cluster_signature(config)
-        config["phase"] = "cluster_ready"
+        if config["phase"] != "installed":
+            config["phase"] = "cluster_ready"
         _save_config(root / "config.json", config, uid)
         _start_pg(config)
         try:
@@ -422,12 +486,25 @@ def install(preflight, keychain=None):
         os.close(lock_fd)
 
 
-def load(root, kit=None):
+def load(root, kit=None, runtime=True):
     kit = Path(kit or Path(__file__).resolve().parent.parent)
     config = _read_config(Path(root), kit, os.getuid())
+    if not runtime:
+        return config
     identity = _coding_identity(config)
-    for path in (config["python"], config["node"], Path(config["pg_bin"]) / "pg_ctl"):
-        _tool(path, identity)
+    config["node"] = _tool(config.get("node_selector", config["node"]), identity)
+    config["python"] = _tool(config.get("python_selector", config["python"]), identity)
+    selector = Path(config.get("pg_selector", config["pg_bin"]))
+    _protect_selector(selector, identity)
+    security.assert_not_agent_writable(selector.resolve(strict=True), identity)
+    config["pg_bin"] = str(selector.resolve(strict=True))
+    config["pg_tools"] = {name: _tool(selector / name, identity)
+                          for name in ("initdb", "pg_ctl", "psql", "postgres")}
+    if not command([config["node"], "--version"]).stdout.decode().startswith("v24."):
+        raise HostError("The configured Node.js version must remain on major 24")
+    for binary in config["pg_tools"].values():
+        if not re.search(r"\(PostgreSQL\) 18\.[0-9]+(?:\s|$)", command([binary, "--version"]).stdout.decode()):
+            raise HostError("The configured PostgreSQL version must remain on major 18")
     if config["phase"] != "installed":
         raise HostError("Installation is incomplete; resume install before service use")
     if software_hash(_software(config)) != config["software_hash"]:
@@ -467,7 +544,12 @@ def _matching_plist(config):
     path = _plist_path(config)
     if path.exists() or path.is_symlink():
         _private_file(path, config["owner_uid"])
-        if plistlib.loads(path.read_bytes()) != _launch_payload(config):
+        actual = plistlib.loads(path.read_bytes())
+        expected = _launch_payload(config)
+        args = actual.get("ProgramArguments", [])
+        if args and isinstance(args[0], str) and Path(args[0]).is_absolute():
+            expected["ProgramArguments"][0] = args[0]
+        if actual != expected:
             raise HostError("An existing launch agent does not match this instance")
     return path
 
@@ -484,14 +566,19 @@ def start(config):
     stop(config)
     _free_port(SERVICE_PORT)
     _write_new(path, plistlib.dumps(_launch_payload(config)))
-    command(["/bin/launchctl", "bootstrap", "gui/%d" % config["owner_uid"], path])
+    try:
+        command(["/bin/launchctl", "bootstrap", "gui/%d" % config["owner_uid"], path])
+    except HostError:
+        path.unlink()
+        raise
     return {"service_loaded": True}
 
 
 def status(config):
     result = command(["/bin/launchctl", "print", _launch_target(config)], check=False)
+    pg = _pg_status(config)
     return {"service_loaded": result.returncode == 0,
-            "postgres_running": _pg_status(config).returncode == 0,
+            "postgres_running": None if pg.returncode == 4 else pg.returncode == 0,
             "starts_at_login": _matching_plist(config).exists()}
 
 
@@ -500,21 +587,24 @@ def stop(config):
     loaded = command(["/bin/launchctl", "print", _launch_target(config)], check=False)
     if loaded.returncode == 0:
         command(["/bin/launchctl", "bootout", _launch_target(config)])
-    if _pg_status(config).returncode == 0:
-        _pg(config, "-w", "-t", "30", "-m", "fast", "stop")
-    # Explicit stop persists across login. Only start recreates RunAtLoad.
+    # Disable autostart even when a removed PostgreSQL tool blocks shutdown.
     if path.exists():
         path.unlink()
+    _stop_owned_pg(config)
     return {"stopped": True, "data_preserved": True, "starts_at_login": False}
 
 
 def uninstall(config):
     stop(config)
     software = _software(config)
+    if not software.exists():
+        return {"uninstalled_service": True, "software_removed": True, "data_preserved": True}
     security.ensure_private_directory(software, config["owner_uid"])
     if software_hash(software) != config["software_hash"]:
         raise HostError("Installed software differs; refusing to remove it")
-    shutil.rmtree(str(software))
+    retired = software.parent / (".removed-" + secrets.token_hex(16))
+    os.rename(str(software), str(retired))
+    shutil.rmtree(str(retired))
     return {"uninstalled_service": True, "software_removed": True, "data_preserved": True,
             "configuration_and_keychain_preserved": True}
 
@@ -548,7 +638,8 @@ def daemon(config, keychain=None):
 
 
 def operator(config, argv, keychain=None):
-    token_pipe = argv[:2] == ["tokens", "create"] and not sys.stdout.isatty()
+    token_pipe = (argv[:2] == ["tokens", "create"] and
+                  stat.S_ISFIFO(os.fstat(sys.stdout.fileno()).st_mode))
     if not sys.stdin.isatty() or (not sys.stdout.isatty() and not token_pipe):
         raise HostError("Operator review requires an interactive terminal")
     if argv[:2] == ["tokens", "create"] and not token_pipe:

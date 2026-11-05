@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import plistlib
 import tempfile
+import subprocess
+import shutil
 import types
 import unittest
 from unittest.mock import patch
@@ -24,6 +26,9 @@ class Store:
         self.values = {}
         self.writes = []
 
+    def check_ready(self):
+        return None
+
     def get(self, instance, key):
         return self.values.get((instance, key))
 
@@ -40,6 +45,8 @@ class HostTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.base = Path(self.temporary.name).resolve()
         self.root = self.base / "private"
+        self.pg_dir = self.base / "pg-bin"
+        self.pg_dir.mkdir()
         self.kit = self.base / "source"
         (self.kit / "runtime").mkdir(parents=True)
         (self.kit / "memory_kit").mkdir()
@@ -63,7 +70,7 @@ class HostTests(unittest.TestCase):
         patch.object(host, "_free_port").start()
         self.preflight = {"workspace": "demo-team", "coding_uid": self.identity["uid"],
                           "owner_uid": self.uid, "root": str(self.root), "kit": str(self.kit),
-                          "pg_bin": "/opt/example/postgres/bin", "node": "/opt/example/node",
+                          "pg_bin": str(self.pg_dir), "node": "/opt/example/node",
                           "python": "/opt/example/python", "software_hash": host.software_hash(self.kit),
                           "existing": None}
 
@@ -96,7 +103,7 @@ class HostTests(unittest.TestCase):
                 patch.object(host.security, "coding_identity", return_value=self.identity), \
                 patch.object(host, "_tool", side_effect=lambda path, identity: str(path)):
             return host.plan("demo-team", "coding", self.root,
-                             "/opt/example/postgres/bin", "/opt/example/node", self.kit)
+                             str(self.pg_dir), "/opt/example/node", self.kit, keychain=self.store)
 
     def test_readonly_plan_leaves_fresh_root_absent(self):
         result = self.plan()
@@ -153,7 +160,7 @@ class HostTests(unittest.TestCase):
                 patch.object(host.security, "coding_identity", return_value=self.identity), \
                 patch.object(host, "_tool", side_effect=lambda path, identity: str(path)), \
                 patch.object(host, "command", side_effect=versions):
-            result = host.plan("demo-team", "coding", self.root, "/opt/example/postgres/bin", "/opt/example/node", self.kit)
+            result = host.plan("demo-team", "coding", self.root, str(self.pg_dir), "/opt/example/node", self.kit, keychain=self.store)
         self.assertIsNone(result["existing"])
         self.assertFalse(self.root.exists())
 
@@ -274,6 +281,130 @@ class HostTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
         self.private.assert_not_called()
         self.assertFalse(self.root.exists())
+
+    def test_locked_keychain_preflight_and_install_write_nothing(self):
+        with patch.object(self.store, "check_ready", side_effect=host.HostError("locked")):
+            with self.assertRaisesRegex(host.HostError, "locked"):
+                self.plan()
+            with self.assertRaisesRegex(host.HostError, "locked"):
+                host.install(self.preflight, self.store)
+        self.assertFalse(self.root.exists())
+        self.private.assert_not_called()
+        self.assertEqual(self.store.writes, [])
+
+    def test_config_only_load_stop_status_uninstall_work_in_partial_phase_without_tools(self):
+        config = self.install()
+        config["phase"] = "cluster_ready"
+        config["node"] = "/missing/node"
+        config["python"] = "/missing/python"
+        host._save_config(self.root / "config.json", config, self.uid)
+        with patch.object(host, "_tool", side_effect=AssertionError("runtime tools must not be required")):
+            loaded = host.load(self.root, kit=self.kit, runtime=False)
+            with patch.object(host, "_plist_path", return_value=self.base / "absent.plist"):
+                self.assertFalse(host.status(loaded)["postgres_running"])
+                self.assertTrue(host.stop(loaded)["stopped"])
+                self.assertTrue(host.uninstall(loaded)["data_preserved"])
+        self.assertTrue((self.root / "postgres/facts").exists())
+
+    def test_failed_launch_bootstrap_removes_autostart_plist(self):
+        config = self.install()
+        path = self.base / "LaunchAgents" / "owned.plist"
+        def fail(argv, **kwargs):
+            if str(argv[0]) == "/bin/launchctl" and argv[1] == "bootstrap":
+                raise host.HostError("no GUI session")
+            return self.command(argv, **kwargs)
+        self.runner.side_effect = fail
+        with patch.object(host, "_plist_path", return_value=path), \
+                patch.object(host, "_coding_identity", return_value=self.identity):
+            with self.assertRaisesRegex(host.HostError, "no GUI session"):
+                host.start(config)
+        self.assertFalse(path.exists())
+
+    def test_interrupted_uninstall_leaves_final_path_absent_and_reinstall_recovers(self):
+        config = self.install()
+        with patch.object(host, "_plist_path", return_value=self.base / "absent.plist"), \
+                patch.object(host.shutil, "rmtree", side_effect=OSError("interrupted delete")):
+            with self.assertRaises(OSError):
+                host.uninstall(config)
+        self.assertFalse(host._software(config).exists())
+        self.assertTrue(list((self.root / "software").glob(".removed-*")))
+        self.preflight["existing"] = config
+        host.install(self.preflight, self.store)
+        self.assertTrue(host._software(config).exists())
+        self.assertEqual((self.root / "postgres/facts").read_bytes(), b"preserve me")
+
+    def test_initdb_early_pg_version_failure_never_adopts_partial_cluster(self):
+        original = self.command
+        def fail(argv, **kwargs):
+            result = original(argv, **kwargs)
+            if Path(str(argv[0])).name == "initdb":
+                raise host.HostError("initdb interrupted after PG_VERSION")
+            return result
+        self.runner.side_effect = fail
+        with self.assertRaisesRegex(host.HostError, "initdb interrupted"):
+            host.install(self.preflight, self.store)
+        self.assertFalse((self.root / "postgres").exists())
+        self.assertEqual(list(self.root.glob(".initdb-*")), [])
+        self.preflight["existing"] = json.loads((self.root / "config.json").read_text())
+        self.runner.side_effect = original
+        host.install(self.preflight, self.store)
+        self.assertTrue((self.root / "postgres/.amk-initdb-complete").exists())
+
+    def test_token_creation_refuses_regular_file_and_accepts_actual_fifo(self):
+        config = self.install()
+        stdin = types.SimpleNamespace(isatty=lambda: True)
+        with tempfile.TemporaryFile(mode="w+") as output, \
+                patch.object(host.sys, "stdin", stdin), patch.object(host.sys, "stdout", output):
+            with self.assertRaises(host.HostError):
+                host.operator(config, ["tokens", "create"], self.store)
+        read_fd, write_fd = os.pipe()
+        try:
+            with os.fdopen(write_fd, "w") as output, \
+                    patch.object(host.sys, "stdin", stdin), patch.object(host.sys, "stdout", output):
+                self.assertEqual(host.operator(config, ["tokens", "create"], self.store), 0)
+        finally:
+            os.close(read_fd)
+
+    def test_symlink_selector_in_coding_writable_directory_refuses_safe_target(self):
+        executable = self.base / "safe-executable"
+        executable.write_text("#!/bin/sh\n")
+        executable.chmod(0o700)
+        directory = self.base / "coding-selector"
+        directory.mkdir()
+        link = directory / "pg_ctl"
+        link.symlink_to(executable)
+        def refuse(path, identity):
+            if path == directory:
+                raise host.security.SecurityError("AGENT_WRITABLE_SOFTWARE")
+        self.writable.side_effect = refuse
+        with self.assertRaises(host.security.SecurityError):
+            host._tool(link, self.identity)
+
+    def test_official_bootstrap_imports_do_not_write_bytecode(self):
+        source = Path(host.__file__).resolve().parent.parent
+        isolated = self.base / "bootstrap-copy"
+        isolated.mkdir()
+        shutil.copy2(source / "memory-kit", isolated / "memory-kit")
+        (isolated / "memory_kit").mkdir()
+        for path in (source / "memory_kit").glob("*.py"):
+            shutil.copy2(path, isolated / "memory_kit" / path.name)
+        result = subprocess.run([str(isolated / "memory-kit"), "--help"],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(list(isolated.rglob("__pycache__")), [])
+
+    def test_config_only_stop_disables_autostart_when_pg_tool_is_missing(self):
+        config = self.install()
+        path = self.base / "owned.plist"
+        path.write_bytes(plistlib.dumps(host._launch_payload(config)))
+        path.chmod(0o600)
+        with patch.object(host, "_plist_path", return_value=path), \
+                patch.object(host, "_pg_status", return_value=types.SimpleNamespace(returncode=4)):
+            self.assertIsNone(host.status(config)["postgres_running"])
+            with self.assertRaisesRegex(host.HostError, "PostgreSQL tools are unavailable"):
+                host.stop(config)
+        self.assertFalse(path.exists())
+        self.assertTrue(any(argv[1:2] == ["bootout"] for argv, kwargs in self.calls))
 
     def test_install_credentials_never_in_argv_or_files(self):
         config = self.install()
