@@ -72,6 +72,8 @@ The service exposes `http://127.0.0.1:47892/mcp`. PostgreSQL uses a Unix socket 
 
 `start` loads the owner LaunchAgent and enables start at login. A loaded job alone is not a healthy-service check. `status` distinguishes loaded service, running PostgreSQL and start-at-login configuration. `stop` drains the owned service/database and removes start-at-login configuration. Run `start` explicitly to enable it again; unrelated services must remain untouched.
 
+After a Python package update, inspect `autostart_python_missing` in `status` and run `start` again if the recorded executable disappeared. If its configured Python selector is also gone and `start` refuses, run `stop`, then repeat the same candidate's `install` command under the available supported Python to refresh that selector. An unknown PostgreSQL state is not reported as stopped: restore the required PostgreSQL 18 tools before attempting recovery.
+
 ## Bind the coding project
 
 The agent receives a `read_submit` token. It can read published facts and propose pending facts, but cannot publish or obtain database credentials. From the operator terminal, first create a fictional business member:
@@ -95,7 +97,9 @@ The destination command has this shape; its stdin must be the secure token strea
 
 Run it from the coding account with its own trusted checkout. It writes `.agent-memory.json`, managed project instructions and MCP entries in `.mcp.json` and `.codex/config.toml`. Configuration contains a Keychain reference and `${AGENT_MEMORY_TOKEN}`, never the token. Unrelated configuration is preserved; ambiguous or conflicting bindings are refused.
 
-Existing personal/global `logthis` definitions cause a deliberate refusal pending an explicit reviewed handoff. They must not be silently overwritten or rerouted. Business instructions reuse the existing `log this` intent; they do not add a competing capture command or a second memory store.
+This unaccepted candidate currently requires a clean coding instruction context. Global Claude/Codex instruction files and alternate project instruction/rule paths are unsupported, as are existing `logthis`, `log this`, `log-this` or `log_this` capture routes. No reviewed-handoff override is implemented. Preserve those files and use a separate clean context for testing; do not delete an existing setup to make preflight pass. The [binding contract](../agent-instructions/business-memory.md) names the supported paths and recovery limits. This compatibility restriction is a release gate.
+
+Business instructions reuse the existing `log this` intent. They do not install a competing capture command or a second memory store. Native model and authentication settings remain in place; this is not certification of every existing instruction setup.
 
 ### Launch a coding session
 
