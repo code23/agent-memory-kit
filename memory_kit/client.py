@@ -187,6 +187,8 @@ def _identity(path):
         return info.st_dev, info.st_ino
     except FileNotFoundError:
         return None
+    except OSError:
+        raise ClientError("A native configuration or governing project path cannot be resolved; inspect permissions or symlink loops and keep existing files intact.") from None
 
 
 def _client_homes():
@@ -217,7 +219,7 @@ def _check_logthis(project):
     candidates = [prefix + "/" + name + suffix for prefix in prefixes
                   for name in ("logthis", "log-this", "log_this", "log this") for suffix in ("", ".md")]
     if any(os.path.lexists(str(root / relative)) for root in (_home(),) + roots for relative in candidates):
-        raise ClientError("An existing log this/logthis command path needs an explicit business-memory handoff before binding.")
+        raise ClientError("This candidate does not support existing log this/logthis command paths. Keep them intact and use a separate clean coding context.")
     for index, native_home in enumerate(_client_homes()):
         instruction_paths = ("AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md")
         if index == 1:
@@ -228,7 +230,7 @@ def _check_logthis(project):
         if any(os.path.lexists(str(native_home / prefix / (name + suffix)))
                for prefix in ("skills", "commands", "prompts")
                for name in ("logthis", "log-this", "log_this", "log this") for suffix in ("", ".md")):
-            raise ClientError("A global client log this/logthis command path needs an explicit business-memory handoff.")
+            raise ClientError("This candidate does not support global log this/logthis command paths. Keep them intact and use a separate clean coding context.")
     for root in roots:
         if root != project and os.path.lexists(str(root / PROFILE_NAME)):
             raise ClientError("An ancestor project already has a business-memory binding; select its root or separate this project explicitly.")
@@ -244,7 +246,7 @@ def _check_logthis(project):
                 continue
             text = _text(_snapshot(root / relative))
             if _ROUTING.search(text) or BEGIN in text or END in text:
-                raise ClientError("Project or ancestor " + relative + " has ambiguous log this/business-memory routing; resolve that instruction file first.")
+                raise ClientError("This candidate does not support ambiguous log this/business-memory routing in project or ancestor " + relative + ". Keep it intact and select a clean project context.")
         if root != project:
             for relative in (".mcp.json", ".codex/config.toml"):
                 text = _text(_snapshot(root / relative))

@@ -125,7 +125,7 @@ class ClientTests(unittest.TestCase):
         path = self.home / ".agents/skills/logthis"
         path.mkdir(parents=True)
         (path / "SKILL.md").write_text("This private content must not be read.")
-        with self.assertRaisesRegex(client.ClientError, "handoff"):
+        with self.assertRaisesRegex(client.ClientError, "does not support"):
             self.connect()
         self.assertEqual(self.tree(), {})
 
@@ -302,6 +302,52 @@ class ClientTests(unittest.TestCase):
         self.connect()
         with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
             self.assertEqual(client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain), 0)
+
+    def test_unsupported_instruction_paths_preserve_all_trees_without_body_reads(self):
+        (self.base / ".git").mkdir()
+        cases = [(self.home / native / filename, False)
+                 for native in (".codex", ".claude")
+                 for filename in ("AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md")]
+        cases += [(self.home / ".claude/rules", True),
+                  (self.project / ".claude/rules", True),
+                  (self.base / ".claude/rules", True)]
+        for path, directory in cases:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if directory:
+                path.mkdir()
+                body = path / "private.md"
+            else:
+                body = path
+            body.write_text("Private fixture body must remain unread and intact.\n")
+            before = {str(item.relative_to(self.base)): item.read_bytes()
+                      for item in self.base.rglob("*") if item.is_file()}
+            real_snapshot = client._snapshot
+            def guarded(candidate):
+                self.assertNotEqual(candidate, body)
+                return real_snapshot(candidate)
+            with self.subTest(path=str(path.relative_to(self.base))), \
+                 patch.object(client, "_snapshot", side_effect=guarded), \
+                 self.assertRaisesRegex(client.ClientError, "does not support"):
+                self.connect()
+            after = {str(item.relative_to(self.base)): item.read_bytes()
+                     for item in self.base.rglob("*") if item.is_file()}
+            self.assertEqual(before, after)
+            self.assertEqual(self.keychain.puts, [])
+            body.unlink()
+            if directory:
+                path.rmdir()
+
+    def test_identity_distinguishes_missing_from_unresolvable_paths(self):
+        self.assertIsNone(client._identity(self.base / "genuinely-missing"))
+        path = self.home / ".claude"
+        path.symlink_to(path)
+        with self.assertRaisesRegex(client.ClientError, "cannot be resolved"):
+            client._identity(path)
+        path.unlink()
+        with patch.object(Path, "stat", side_effect=PermissionError("private fixture diagnostic")):
+            with self.assertRaisesRegex(client.ClientError, "cannot be resolved") as failure:
+                client._identity(path)
+        self.assertNotIn("private fixture diagnostic", str(failure.exception))
 
     def test_routing_collision_does_not_cross_newlines_and_names_file(self):
         path = self.project / "AGENTS.md"

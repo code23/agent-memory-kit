@@ -24,10 +24,11 @@ calls `memory_submit` for that workspace. It returns pending proposal IDs. It
 never approves or publishes proposals, captures private/personal material or
 secrets, or falls back to a private memory store.
 
-An existing global/private or project `logthis` workflow requires an explicit
-handoff before installation. The installer checks path existence without reading
-private skill contents and refuses ambiguous bindings. Native YOLO launchers and
-their three-model routing remain unchanged.
+An existing global/private or project `logthis` workflow is unsupported by this
+candidate. Keep its files intact and use a separately authorized clean coding
+context. The installer checks path existence without reading private skill
+contents and refuses ambiguous bindings; it implements no reviewed handoff for
+those contexts. Native YOLO launchers and their three-model routing are unchanged.
 
 Project configuration references `AGENT_MEMORY_TOKEN`; the launch wrapper reads
 the agent credential from Keychain and sets that variable only in the child
