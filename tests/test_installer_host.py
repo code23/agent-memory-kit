@@ -449,6 +449,14 @@ class HostTests(unittest.TestCase):
         self.assertEqual(saved["python_selector"], "/replacement/python")
         self.assertNotIn("pg_tools", saved)
 
+    def test_missing_verified_pg_tools_refuses_before_any_install_write(self):
+        self.preflight.pop("pg_tools")
+        with self.assertRaisesRegex(host.HostError, "preflight tools are required"):
+            host.install(self.preflight, self.store)
+        self.private.assert_not_called()
+        self.assertFalse(self.root.exists())
+        self.assertEqual(self.store.writes, [])
+
     def test_install_credentials_never_in_argv_or_files(self):
         config = self.install()
         self.assertEqual(config["phase"], "installed")

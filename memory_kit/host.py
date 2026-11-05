@@ -428,6 +428,9 @@ def _copy_software(kit, config):
 
 def install(preflight, keychain=None):
     """Install/resume only a preflighted matching instance; never delete its database."""
+    tools = preflight.get("pg_tools")
+    if not isinstance(tools, dict) or set(tools) != {"initdb", "pg_ctl", "psql", "postgres"}:
+        raise HostError("Verified PostgreSQL preflight tools are required")
     keychain = keychain or MacKeychain()
     keychain.check_ready()
     root, kit = Path(preflight["root"]), Path(preflight["kit"])
