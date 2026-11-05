@@ -218,14 +218,14 @@ def assert_private_root(path: Path, kit_root: Path, owner_uid: int) -> None:
     _private_directory(path, owner_uid, create=False, checkout_identity=checkout_identity)
 
 
-def coding_identity(name: str, current_uid: int) -> dict:
-    """Resolve only the explicitly selected separate local coding account."""
+def standard_coding_identity(name: str) -> dict:
+    """Resolve a standard account, including current directory-service groups."""
     if not isinstance(name, str) or not name or "\x00" in name:
         raise SecurityError("CODING_ACCOUNT_REQUIRED")
     try:
         account = pwd.getpwnam(name)
-        if account.pw_uid < 501 or account.pw_uid == current_uid:
-            raise SecurityError("SEPARATE_CODING_ACCOUNT_REQUIRED")
+        if account.pw_uid < 501:
+            raise SecurityError("STANDARD_CODING_ACCOUNT_REQUIRED")
         groups = set(os.getgrouplist(account.pw_name, account.pw_gid))
         # Include the primary group explicitly even on unusual directory services.
         groups.add(account.pw_gid)
@@ -239,6 +239,14 @@ def coding_identity(name: str, current_uid: int) -> dict:
         raise
     except (KeyError, OSError, ValueError):
         raise SecurityError("CODING_ACCOUNT_UNAVAILABLE") from None
+
+
+def coding_identity(name: str, current_uid: int) -> dict:
+    """Resolve only the explicitly selected separate local coding account."""
+    identity = standard_coding_identity(name)
+    if identity["uid"] == current_uid:
+        raise SecurityError("SEPARATE_CODING_ACCOUNT_REQUIRED")
+    return identity
 
 
 def assert_not_agent_writable(path: Path, identity: dict) -> None:

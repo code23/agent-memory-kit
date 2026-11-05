@@ -14,7 +14,7 @@ from unittest.mock import patch
 from memory_kit.keychain import MacKeychain, SecretStoreError, _NativeKeychain, validate_instance
 from memory_kit.security import (
     SecurityError, _DarwinStatFS64, _check_acl, _check_volume, assert_not_agent_writable, assert_private_root,
-    coding_identity, ensure_private_directory, validate_workspace,
+    coding_identity, ensure_private_directory, standard_coding_identity, validate_workspace,
 )
 
 
@@ -267,6 +267,7 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(coding_identity("test-coder", 700), {
                 "name": "test-coder", "uid": 750, "gid": 751, "groups": [751, 752],
             })
+            self.assertEqual(standard_coding_identity("test-coder")["groups"], [751, 752])
             with self.assertRaisesRegex(SecurityError, "^SEPARATE_CODING_ACCOUNT_REQUIRED$"):
                 coding_identity("test-coder", 750)
             account.pw_uid = 500
@@ -286,6 +287,11 @@ class DirectoryTests(unittest.TestCase):
                     patch("memory_kit.security.os.getgrouplist", return_value=[751, group]), \
                     self.assertRaisesRegex(SecurityError, "^STANDARD_CODING_ACCOUNT_REQUIRED$"):
                 coding_identity("test-coder", 700)
+            with self.subTest(shared_group=group), \
+                    patch("memory_kit.security.pwd.getpwnam", return_value=account), \
+                    patch("memory_kit.security.os.getgrouplist", return_value=[751, group]), \
+                    self.assertRaisesRegex(SecurityError, "^STANDARD_CODING_ACCOUNT_REQUIRED$"):
+                standard_coding_identity("test-coder")
             with self.assertRaisesRegex(SecurityError, "^STANDARD_CODING_ACCOUNT_REQUIRED$"):
                 assert_not_agent_writable(self.root / "checkout", {"uid": 750, "gid": 751, "groups": [group]})
 
