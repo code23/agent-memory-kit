@@ -415,7 +415,7 @@ class HostTests(unittest.TestCase):
         outer.mkdir(mode=0o700)
         middle.mkdir(mode=0o770)
         middle.chmod(0o770)
-        target = Path(host.sys.executable).resolve()
+        target = Path(shutil.which("node")).resolve()
         (middle / "node").symlink_to(target)
         (outer / "node").symlink_to(middle / "node")
         self.writable.side_effect = REAL_NOT_WRITABLE
@@ -437,6 +437,17 @@ class HostTests(unittest.TestCase):
             with self.assertRaises(host.HostError):
                 host.stop(config)
         self.assertFalse(any(Path(argv[0]).name == "pg_ctl" for argv, kwargs in self.calls))
+
+    def test_explicit_reinstall_refreshes_stale_python_selector(self):
+        config = self.install()
+        config["python_selector"] = "/removed/python"
+        host._save_config(self.root / "config.json", config, self.uid)
+        self.preflight["existing"] = config
+        self.preflight["python_selector"] = "/replacement/python"
+        host.install(self.preflight, self.store)
+        saved = json.loads((self.root / "config.json").read_text())
+        self.assertEqual(saved["python_selector"], "/replacement/python")
+        self.assertNotIn("pg_tools", saved)
 
     def test_install_credentials_never_in_argv_or_files(self):
         config = self.install()
