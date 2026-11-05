@@ -135,12 +135,19 @@ def _protect_selector(path, identity):
             current = current.parent
             continue
         candidate = current / part
-        if stat.S_ISLNK(candidate.lstat().st_mode):
+        try:
+            info = candidate.lstat()
+        except OSError:
+            raise HostError("An explicit executable path is unavailable") from None
+        if stat.S_ISLNK(info.st_mode):
             security.assert_not_agent_writable(current, identity)
             hops += 1
             if hops > 40:
                 raise HostError("Tool selector has a cyclic or excessive symlink chain")
-            target = Path(os.readlink(candidate))
+            try:
+                target = Path(os.readlink(candidate))
+            except OSError:
+                raise HostError("An explicit executable path is unavailable") from None
             if target.is_absolute():
                 current = Path("/")
                 pending = list(target.parts[1:]) + pending
@@ -450,7 +457,7 @@ def install(preflight, keychain=None):
         config = preflight["existing"]
         if (root / "config.json").exists():
             disk = _read_config(root, kit, uid)
-            if disk != {key: value for key, value in config.items() if key != "pg_tools"}:
+            if config is None or disk != {key: value for key, value in config.items() if key != "pg_tools"}:
                 raise HostError("Installation changed after preflight")
         elif config is not None:
             raise HostError("Installation changed after preflight")

@@ -457,6 +457,55 @@ class HostTests(unittest.TestCase):
         self.assertFalse(self.root.exists())
         self.assertEqual(self.store.writes, [])
 
+    def test_fresh_preflight_refuses_config_created_by_other_install(self):
+        self.install()
+        before = (self.root / "config.json").read_bytes()
+        self.assertIsNone(self.preflight["existing"])
+        self.calls.clear()
+        with self.assertRaisesRegex(host.HostError, "changed after preflight"):
+            host.install(self.preflight, self.store)
+        self.assertEqual(self.calls, [])
+        self.assertEqual((self.root / "config.json").read_bytes(), before)
+
+    def test_missing_selector_has_specific_safe_diagnostic(self):
+        with self.assertRaisesRegex(host.HostError, "explicit executable path is unavailable"):
+            host._tool(self.base / "missing-node", self.identity)
+        self.assertEqual(self.calls, [])
+
+    def test_actual_symlink_cycle_is_bounded_and_refused_before_execution(self):
+        first = self.base / "first"
+        second = self.base / "second"
+        first.symlink_to(second)
+        second.symlink_to(first)
+        with self.assertRaisesRegex(host.HostError, "cyclic or excessive symlink chain"):
+            host._tool(first, self.identity)
+        self.assertEqual(self.calls, [])
+
+    def test_status_reports_missing_autostart_python(self):
+        config = self.install()
+        path = self.base / "owned.plist"
+        payload = host._launch_payload(config)
+        path.write_bytes(plistlib.dumps(payload))
+        path.chmod(0o600)
+        with patch.object(host, "_plist_path", return_value=path):
+            self.assertTrue(host.status(config)["autostart_python_missing"])
+            payload["ProgramArguments"][0] = str(Path(host.sys.executable).resolve())
+            path.write_bytes(plistlib.dumps(payload))
+            self.assertFalse(host.status(config)["autostart_python_missing"])
+
+    def test_retry_uninstall_cleans_owned_retired_copy_and_returns_consistent_keys(self):
+        config = self.install()
+        with patch.object(host, "_plist_path", return_value=self.base / "absent.plist"):
+            with patch.object(host.shutil, "rmtree", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    host.uninstall(config)
+            self.assertTrue(list((self.root / "software").glob(".removed-*")))
+            result = host.uninstall(config)
+        self.assertEqual(list((self.root / "software").glob(".removed-*")), [])
+        self.assertEqual(result, {"uninstalled_service": True, "software_removed": True,
+                                  "data_preserved": True, "configuration_and_keychain_preserved": True})
+        self.assertTrue((self.root / "postgres/facts").exists())
+
     def test_install_credentials_never_in_argv_or_files(self):
         config = self.install()
         self.assertEqual(config["phase"], "installed")
