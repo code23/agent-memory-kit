@@ -193,7 +193,7 @@ class DirectoryTests(unittest.TestCase):
             with self.assertRaisesRegex(SecurityError, "^PATH_REPLACED$"):
                 ensure_private_directory(path, self.uid)
 
-    def test_root_is_outside_checkout_and_must_exist(self):
+    def test_root_is_outside_checkout_and_missing_root_is_read_only(self):
         path = self.root / "checkout"
         path.mkdir(mode=0o700)
         for candidate in (path, path / "private"):
@@ -201,8 +201,9 @@ class DirectoryTests(unittest.TestCase):
                 assert_private_root(candidate, path, self.uid)
         with self.assertRaises(SecurityError):
             assert_private_root(Path("/"), path, self.uid)
-        with self.assertRaisesRegex(SecurityError, "^PRIVATE_ROOT_MISSING$"):
-            assert_private_root(self.root / "missing", path, self.uid)
+        missing = self.root / "missing" / "nested"
+        assert_private_root(missing, path, self.uid)
+        self.assertFalse((self.root / "missing").exists())
 
     def test_coding_identity_requires_explicit_distinct_account(self):
         account = SimpleNamespace(pw_name="test-coder", pw_uid=750, pw_gid=751)
@@ -324,6 +325,35 @@ class ACLTests(unittest.TestCase):
             _check_acl(descriptor)
         finally:
             os.close(descriptor)
+
+    @unittest.skipUnless(sys.platform == "darwin", "native read-only macOS preflight")
+    def test_actual_private_root_preflight_does_not_create_missing_target(self):
+        # No patched security guard: exercise real dirfd, ownership and ACLs.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            target = root / "Application Support" / "Memory Kit" / "sample"
+            assert_private_root(target, root / "checkout", os.getuid())
+            self.assertFalse((root / "Application Support").exists())
+            ensure_private_directory(target, os.getuid())
+            assert_private_root(target, root / "checkout", os.getuid())
+
+    @unittest.skipUnless(sys.platform == "darwin", "native read-only macOS preflight")
+    def test_actual_missing_root_still_rejects_unsafe_ancestor_and_symlink(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            unsafe = root / "unsafe"
+            unsafe.mkdir(mode=0o777)
+            unsafe.chmod(0o777)
+            with self.assertRaisesRegex(SecurityError, "^UNSAFE_ANCESTOR_MODE$"):
+                assert_private_root(unsafe / "missing", root / "checkout", os.getuid())
+            safe = root / "safe"
+            safe.mkdir(mode=0o700)
+            link = root / "link"
+            link.symlink_to(safe, target_is_directory=True)
+            with self.assertRaises(SecurityError):
+                assert_private_root(link / "missing", root / "checkout", os.getuid())
+            self.assertFalse((unsafe / "missing").exists())
+            self.assertFalse((safe / "missing").exists())
 
 
 if __name__ == "__main__":

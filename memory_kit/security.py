@@ -124,7 +124,10 @@ def _private_directory(path: Path, owner_uid: int, create: bool) -> None:
                 child = os.open(component, _open_flags(), dir_fd=fd)
             except FileNotFoundError:
                 if not create:
-                    raise SecurityError("PRIVATE_ROOT_MISSING") from None
+                    # A read-only preflight may inspect a fresh install. The
+                    # existing parent was validated above; creation performs
+                    # the same walk again and checks every new component.
+                    break
                 # mkdir is relative to the verified parent; never follows a link.
                 os.mkdir(component, 0o700, dir_fd=fd)
                 child = os.open(component, _open_flags(), dir_fd=fd)
@@ -157,6 +160,7 @@ def ensure_private_directory(path: Path, owner_uid: int) -> None:
 
 
 def assert_private_root(path: Path, kit_root: Path, owner_uid: int) -> None:
+    """Read-only preflight for an existing root or its safe existing ancestors."""
     path = _absolute(path)
     kit_root = Path(kit_root).resolve()
     if path == kit_root or kit_root in path.parents:
