@@ -212,7 +212,9 @@ def assert_not_agent_writable(path: Path, identity: dict) -> None:
                 if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
                     raise SecurityError("UNSAFE_SOFTWARE_TYPE")
                 snapshots.append((current, info.st_dev, info.st_ino))
-                if (info.st_uid == uid and info.st_mode & 0o200
+                # An owner can chmod their inode even when write is currently
+                # disabled, including on an ancestor used to replace software.
+                if (info.st_uid == uid
                         or info.st_gid in groups and info.st_mode & 0o020
                         or info.st_mode & 0o002):
                     raise SecurityError("AGENT_WRITABLE_SOFTWARE")

@@ -239,6 +239,7 @@ class DirectoryTests(unittest.TestCase):
         identity = {"uid": 750, "gid": 751, "groups": [751, 752]}
         for owner, group, mode, writable in (
                 (700, 701, 0o755, False), (750, 701, 0o755, True),
+                (750, 701, 0o444, True),
                 (700, 752, 0o775, True), (700, 701, 0o777, True)):
             with self.subTest(owner=owner, group=group, mode=mode):
                 directory = os.stat_result((stat.S_IFDIR | 0o755, 1, 2, 1, 0, 0, 0, 0, 0, 0))
