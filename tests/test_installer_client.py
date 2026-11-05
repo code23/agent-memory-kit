@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,6 +16,10 @@ class FakeKeychain:
     def __init__(self):
         self.values = {}
         self.puts = []
+        self.readiness_checks = 0
+
+    def check_ready(self):
+        self.readiness_checks += 1
 
     def get(self, instance, role):
         return self.values.get((instance, role))
@@ -89,6 +94,16 @@ class ClientTests(unittest.TestCase):
                 self.connect(url=url)
         with self.assertRaises(client.ClientError):
             self.connect(workspace="business\nextra")
+        self.assertEqual(self.tree(), {})
+        self.assertEqual(self.keychain.puts, [])
+
+    def test_workspace_and_instance_use_shared_runtime_contracts_before_mutation(self):
+        for workspace in ("0", "my_team", "Business", "a", "a" * 32, "a" * 41, "business.fixture"):
+            with self.subTest(workspace=workspace), self.assertRaises(client.ClientError):
+                self.connect(workspace=workspace)
+        for instance in ("Caps", ".bad", "a" * 41, "a.b"):
+            with self.subTest(instance=instance), self.assertRaises(client.ClientError):
+                self.connect(instance=instance)
         self.assertEqual(self.tree(), {})
         self.assertEqual(self.keychain.puts, [])
 
@@ -272,11 +287,160 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(os.environ.get(client.TOKEN_ENV), prior)
         self.assertNotIn(self.token, b"".join(self.tree().values()))
 
+    def test_ordinary_unmanaged_edits_do_not_brick_run_or_connect(self):
+        self.connect()
+        for relative in ("AGENTS.md", "CLAUDE.md"):
+            with (self.project / relative).open("a") as handle:
+                handle.write("\nOrdinary project guidance.\n")
+        mcp_path = self.project / ".mcp.json"
+        mcp = json.loads(mcp_path.read_text())
+        mcp["mcpServers"]["other"] = {"url": "http://127.0.0.1:77/mcp"}
+        mcp_path.write_text(json.dumps(mcp))
+        with (self.project / ".codex/config.toml").open("a") as handle:
+            handle.write('\n[mcp_servers.other]\nurl = "http://127.0.0.1:77/mcp"\n')
+        before = self.tree()
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+            self.assertEqual(client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain), 0)
+        self.connect()
+        self.assertEqual(self.tree(), before)
+
+    def test_reconnect_uses_fresh_immutable_instance_without_editing_configs(self):
+        self.connect()
+        before = self.tree()
+        replacement = b"offline-rotated-fixture"
+        profile = client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                   replacement, self.keychain, "rotated-fixture")
+        self.assertEqual(profile["keychain_instance"], "rotated-fixture")
+        self.assertEqual(self.keychain.get("fixture", "agent"), self.token)
+        self.assertEqual(self.keychain.get("rotated-fixture", "agent"), replacement)
+        self.assertEqual({key: value for key, value in self.tree().items() if key != client.PROFILE_NAME},
+                         {key: value for key, value in before.items() if key != client.PROFILE_NAME})
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch:
+            client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+        self.assertEqual(launch.call_args.kwargs["env"][client.TOKEN_ENV], replacement.decode())
+        self.assertNotIn(replacement, b"".join(self.tree().values()))
+
+    def test_reconnect_rejects_scope_redirection_and_mutating_existing_instance(self):
+        self.connect()
+        before = self.tree()
+        for workspace, url, instance in (("another-business", "http://127.0.0.1:4237/mcp", "new-fixture"),
+                                         ("business-fixture", "http://127.0.0.1:4238/mcp", "new-fixture"),
+                                         ("business-fixture", "http://127.0.0.1:4237/mcp", "fixture")):
+            with self.subTest(workspace=workspace, url=url, instance=instance), self.assertRaises(client.ClientError):
+                client.reconnect(self.project, workspace, url, b"replacement-fixture", self.keychain, instance)
+        self.assertEqual(before, self.tree())
+        self.assertEqual(self.keychain.puts, [("fixture", "agent")])
+
+    def test_reconnect_rejects_conflicting_fresh_instance(self):
+        self.connect()
+        self.keychain.values[("rotated-fixture", "agent")] = b"unrelated-fixture"
+        before = self.tree()
+        with self.assertRaises(client.ClientError):
+            client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                             b"replacement-fixture", self.keychain, "rotated-fixture")
+        self.assertEqual(before, self.tree())
+        self.assertEqual(self.keychain.puts, [("fixture", "agent")])
+
+    def test_reconnect_requires_existing_intact_binding_before_store_write(self):
+        with self.assertRaises(client.ClientError):
+            client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                             b"replacement-fixture", self.keychain, "rotated-fixture")
+        self.assertEqual(self.keychain.puts, [])
+        self.connect()
+        path = self.project / "AGENTS.md"
+        path.write_text(path.read_text().replace("pending human review", "published immediately"))
+        before = self.tree()
+        with self.assertRaises(client.ClientError):
+            client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                             b"replacement-fixture", self.keychain, "rotated-fixture")
+        self.assertEqual(before, self.tree())
+        self.assertEqual(self.keychain.puts, [("fixture", "agent")])
+
+    def test_reconnect_keychain_failure_leaves_old_binding_usable(self):
+        self.connect()
+        before = self.tree()
+        with patch.object(self.keychain, "put", side_effect=RuntimeError("SECURE_STORE_UNAVAILABLE")):
+            with self.assertRaises(RuntimeError):
+                client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                 b"replacement-fixture", self.keychain, "rotated-fixture")
+        self.assertEqual(before, self.tree())
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch:
+            client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+        self.assertEqual(launch.call_args.kwargs["env"][client.TOKEN_ENV], self.token.decode())
+
+    def test_reconnect_profile_commit_failure_can_retry_same_unused_secure_item(self):
+        self.connect()
+        before = self.tree()
+        with patch.object(client, "_replace", side_effect=RuntimeError("PROFILE_WRITE_FAILED")):
+            with self.assertRaises(RuntimeError):
+                client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                 b"replacement-fixture", self.keychain, "rotated-fixture")
+        self.assertEqual(before, self.tree())
+        self.assertEqual(self.keychain.get("rotated-fixture", "agent"), b"replacement-fixture")
+        profile = client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                   b"replacement-fixture", self.keychain, "rotated-fixture")
+        self.assertEqual(profile["keychain_instance"], "rotated-fixture")
+
+    def test_reconnect_compare_and_swap_preserves_concurrent_profile_edit(self):
+        self.connect()
+        path = self.project / client.PROFILE_NAME
+        def concurrent_edit(*args):
+            path.write_text("concurrent user edit")
+        with patch.object(self.keychain, "put", side_effect=concurrent_edit):
+            with self.assertRaises(client.ClientError):
+                client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                 b"replacement-fixture", self.keychain, "rotated-fixture")
+        self.assertEqual(path.read_text(), "concurrent user edit")
+        self.assertEqual(self.keychain.get("fixture", "agent"), self.token)
+
+    def test_legacy_profile_upgrade_preserves_ordinary_edits_and_bound_scope(self):
+        self.connect()
+        path = self.project / client.PROFILE_NAME
+        legacy = json.loads(path.read_text())
+        legacy["version"] = 1
+        legacy["managed_hashes"] = {relative: client._digest((self.project / relative).read_bytes())
+                                    for relative in client._FILES}
+        path.write_text(json.dumps(legacy))
+        with (self.project / "AGENTS.md").open("a") as handle:
+            handle.write("\nNew ordinary project guidance.\n")
+        with self.assertRaises(client.ClientError):
+            client.run(path, ["codex-yolo"], self.keychain)
+        before = self.tree()
+        upgraded = self.connect()
+        self.assertEqual(upgraded["version"], 2)
+        self.assertEqual({key: value for key, value in self.tree().items() if key != client.PROFILE_NAME},
+                         {key: value for key, value in before.items() if key != client.PROFILE_NAME})
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+            self.assertEqual(client.run(path, ["codex-yolo"], self.keychain), 0)
+
+    def test_managed_endpoint_or_token_reference_edit_cannot_be_rehashed_into_valid_scope(self):
+        self.connect()
+        mcp_path = self.project / ".mcp.json"
+        profile_path = self.project / client.PROFILE_NAME
+        before = mcp_path.read_text()
+        for key, value in (("url", "http://127.0.0.1:9999/mcp"), ("headers", {"Authorization": "Bearer wrong-fixture"})):
+            mcp = json.loads(before)
+            mcp["mcpServers"][client.SERVER_NAME][key] = value
+            mcp_path.write_text(json.dumps(mcp))
+            profile = json.loads(profile_path.read_text())
+            region = json.dumps(mcp["mcpServers"][client.SERVER_NAME], sort_keys=True, separators=(",", ":")).encode()
+            profile["managed_hashes"][".mcp.json"] = client._digest(region)
+            profile_path.write_text(json.dumps(profile))
+            with self.subTest(key=key), self.assertRaises(client.ClientError):
+                client.run(profile_path, ["codex-yolo"], self.keychain)
+
+    def test_second_logthis_guidance_outside_managed_block_fails_closed(self):
+        self.connect()
+        with (self.project / "AGENTS.md").open("a") as handle:
+            handle.write("\nUse another logthis workflow.\n")
+        with self.assertRaises(client.ClientError):
+            client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+
     def test_changed_managed_file_and_missing_keychain_fail_closed(self):
         self.connect()
         path = self.project / "CLAUDE.md"
         before = path.read_bytes()
-        path.write_bytes(before + b"changed")
+        path.write_bytes(before.replace(b"never approve or publish", b"approve and publish"))
         with patch.object(subprocess, "run") as launch:
             with self.assertRaises(client.ClientError):
                 client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
@@ -315,6 +479,62 @@ class ClientTests(unittest.TestCase):
                 client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
             launch.assert_not_called()
         path.chmod(0o700)
+
+    def test_real_child_receives_only_scoped_environment_and_requested_exit_status(self):
+        self.connect()
+        argv = [sys.executable, "-c",
+                'import os,sys; assert os.environ.get("AGENT_MEMORY_TOKEN"); assert os.getcwd() == sys.argv[1]; sys.exit(13)',
+                str(self.project)]
+        prior = os.environ.get(client.TOKEN_ENV)
+        self.assertEqual(client.run(self.project / client.PROFILE_NAME, argv, self.keychain), 13)
+        self.assertNotIn(self.token.decode(), " ".join(argv))
+        self.assertEqual(os.environ.get(client.TOKEN_ENV), prior)
+
+    def test_connection_sink_preflight_is_readonly_and_checks_expected_coding_uid(self):
+        ready = client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                        self.keychain, "fixture", os.getuid())
+        self.assertTrue(ready["ready"])
+        self.assertFalse(ready["item_access_verified"])
+        self.assertFalse(ready["credential_received"])
+        self.assertFalse(ready["changes_made"])
+        self.assertEqual(self.tree(), {})
+        self.assertEqual(self.keychain.puts, [])
+        self.assertEqual(self.keychain.readiness_checks, 1)
+        with self.assertRaises(client.ClientError):
+            client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                    self.keychain, "fixture", os.getuid() + 1)
+        self.assertEqual(self.keychain.readiness_checks, 1)
+
+    def test_connection_sink_preflight_rejects_collisions_before_keychain_readiness(self):
+        (self.project / "CLAUDE.md").write_text("Use a private logthis workflow.\n")
+        before = self.tree()
+        with self.assertRaises(client.ClientError):
+            client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                    self.keychain, "fixture", os.getuid())
+        self.assertEqual(before, self.tree())
+        self.assertEqual(self.keychain.readiness_checks, 0)
+
+    def test_connection_sink_preflight_keychain_locked_fails_without_token_or_files(self):
+        with patch.object(self.keychain, "check_ready", side_effect=RuntimeError("KEYCHAIN_LOCKED")):
+            with self.assertRaisesRegex(RuntimeError, "KEYCHAIN_LOCKED"):
+                client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                        self.keychain, "fixture", os.getuid())
+        self.assertEqual(self.tree(), {})
+        self.assertEqual(self.keychain.puts, [])
+
+    def test_connection_sink_preflight_existing_rotation_scope_and_instance(self):
+        self.connect()
+        before = self.tree()
+        client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                self.keychain, "rotated-fixture", os.getuid(), rekey=True)
+        self.assertEqual(before, self.tree())
+        for workspace, instance, rekey in (("another-business", "rotated-fixture", True),
+                                           ("business-fixture", "fixture", True),
+                                           ("business-fixture", "rotated-fixture", False)):
+            with self.subTest(workspace=workspace, instance=instance, rekey=rekey), self.assertRaises(client.ClientError):
+                client.check_connection(self.project, workspace, "http://127.0.0.1:4237/mcp",
+                                        self.keychain, instance, os.getuid(), rekey=rekey)
+        self.assertEqual(before, self.tree())
 
 
 if __name__ == "__main__":

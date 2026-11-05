@@ -13,6 +13,9 @@ import secrets
 import tomllib
 from urllib.parse import urlsplit
 
+from .keychain import SecretStoreError, validate_instance
+from .security import SecurityError, validate_workspace
+
 
 PROFILE_NAME = ".agent-memory.json"
 SERVER_NAME = "business-memory"
@@ -132,10 +135,11 @@ def _text(snapshot):
 
 
 def _validate_values(workspace, url, instance):
-    if not isinstance(workspace, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", workspace):
-        raise ClientError("Select an explicit business workspace identifier.")
-    if not isinstance(instance, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", instance):
-        raise ClientError("Select a valid Keychain instance identifier.")
+    try:
+        validate_workspace(workspace)
+        validate_instance(instance)
+    except (SecurityError, SecretStoreError):
+        raise ClientError("Select a valid business workspace and Keychain instance identifier.") from None
     try:
         parts = urlsplit(url)
         valid = (parts.scheme == "http" and parts.hostname == "127.0.0.1"
@@ -209,7 +213,7 @@ def _load_profile(path):
         raise ClientError("Business-memory profile is missing or invalid; connect this project first.") from None
     required = {"version", "workspace", "url", "keychain_instance", "managed_hashes"}
     if (not isinstance(profile, dict) or set(profile) != required
-            or type(profile["version"]) is not int or profile["version"] != 1):
+            or type(profile["version"]) is not int or profile["version"] not in (1, 2)):
         raise ClientError("Business-memory profile is incomplete or unsupported.")
     _validate_values(profile["workspace"], profile["url"], profile["keychain_instance"])
     hashes = profile["managed_hashes"]
@@ -219,31 +223,74 @@ def _load_profile(path):
     return profile
 
 
-def _verify(project, profile):
-    _check_logthis(project)
-    _safe_path(project / ".codex", directory=True)
-    for relative, expected in profile["managed_hashes"].items():
-        snapshot = _snapshot(project / relative)
-        if snapshot is None or _digest(snapshot[3]) != expected:
-            raise ClientError("A managed project file changed or is missing; inspect and reconnect explicitly before launching.")
-    # The profile is nonsecret input too: matching hashes alone do not establish
-    # that its workspace/endpoint agrees with the actual client configuration.
-    expected_server = {"type": "http", "url": profile["url"],
-                       "headers": {"Authorization": "Bearer ${AGENT_MEMORY_TOKEN}"}}
+def _region(text, begin, end):
+    if text.count(begin) != 1 or text.count(end) != 1:
+        raise ClientError("A managed binding region is missing or duplicated; restore it from reviewed project history.")
+    start, finish = text.index(begin), text.index(end) + len(end)
+    if finish < start or (start and text[start - 1] != "\n") or (finish < len(text) and text[finish] not in "\r\n"):
+        raise ClientError("A managed binding region has invalid boundaries; restore it from reviewed project history.")
+    return text[start:finish], text[:start] + text[finish:]
+
+
+def _managed_parts(data, workspace, url):
+    """Validate the exact managed scope while allowing unrelated project edits."""
     try:
-        mcp = _json(_text(_snapshot(project / ".mcp.json")))
+        mcp = _json(data[".mcp.json"].decode("utf-8"))
         server = mcp["mcpServers"][SERVER_NAME]
-    except (ValueError, TypeError, KeyError):
-        raise ClientError("The managed MCP configuration is inconsistent with its profile.") from None
+    except (ValueError, TypeError, KeyError, UnicodeDecodeError):
+        raise ClientError("The managed MCP configuration is missing or invalid.") from None
+    expected_server = {"type": "http", "url": url,
+                       "headers": {"Authorization": "Bearer ${AGENT_MEMORY_TOKEN}"}}
     if server != expected_server:
         raise ClientError("The managed MCP configuration is inconsistent with its profile.")
-    toml = _text(_snapshot(project / ".codex/config.toml"))
-    if _toml_block(profile["url"]) not in toml:
+    parts = {".mcp.json": json.dumps(server, sort_keys=True, separators=(",", ":")).encode()}
+    try:
+        toml = data[".codex/config.toml"].decode("utf-8")
+        parsed = tomllib.loads(toml)
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError):
+        raise ClientError("The Codex configuration is invalid; repair its unrelated edits before launching.") from None
+    region, _ = _region(toml, TOML_BEGIN, TOML_END)
+    servers = parsed.get("mcp_servers", {})
+    if (region != _toml_block(url).rstrip("\n")
+            or not isinstance(servers, dict)
+            or servers.get(SERVER_NAME) != {"url": url, "bearer_token_env_var": TOKEN_ENV}):
         raise ClientError("The managed Codex configuration is inconsistent with its profile.")
+    parts[".codex/config.toml"] = region.encode()
     for relative in ("AGENTS.md", "CLAUDE.md"):
-        instructions = _text(_snapshot(project / relative))
-        if instructions.count(BEGIN) != 1 or instructions.count(END) != 1 or _binding(profile["workspace"]) not in instructions:
+        try:
+            instructions = data[relative].decode("utf-8")
+        except UnicodeDecodeError:
+            raise ClientError("Project instructions must be UTF-8.") from None
+        region, outside = _region(instructions, BEGIN, END)
+        if region != _binding(workspace):
             raise ClientError("The managed instruction binding is inconsistent with its profile.")
+        if re.search(r"\blogthis\b", outside, re.IGNORECASE):
+            raise ClientError("Project instructions define another logthis workflow; resolve its business-memory handoff explicitly.")
+        parts[relative] = region.encode()
+    return parts
+
+
+def _profile(workspace, url, instance, data):
+    parts = _managed_parts(data, workspace, url)
+    return {"version": 2, "workspace": workspace, "url": url, "keychain_instance": instance,
+            "managed_hashes": {relative: _digest(value) for relative, value in parts.items()}}
+
+
+def _verify(project, profile, allow_legacy_edits=False):
+    _check_logthis(project)
+    _safe_path(project / ".codex", directory=True)
+    data = {}
+    for relative in _FILES:
+        snapshot = _snapshot(project / relative)
+        if snapshot is None:
+            raise ClientError("A managed binding file is missing; restore it from reviewed project history.")
+        data[relative] = snapshot[3]
+    parts = _managed_parts(data, profile["workspace"], profile["url"])
+    hashed = data if profile["version"] == 1 else parts
+    if not (profile["version"] == 1 and allow_legacy_edits):
+        if any(_digest(value) != profile["managed_hashes"][relative] for relative, value in hashed.items()):
+            raise ClientError("Binding integrity check failed; use connect to upgrade a legacy profile or restore managed content from reviewed history.")
+    return data
 
 
 def _toml_block(url):
@@ -289,21 +336,8 @@ def _replace(path, expected, data):
                 pass
 
 
-def connect(project: Path, workspace: str, url: str, token: bytes, keychain, instance: str) -> dict:
-    """Bind an explicitly selected project; credentials remain solely in Keychain."""
-    project = _project(project)
-    _validate_values(workspace, url, instance)
-    _token_text(token)
-    profile_path = project / PROFILE_NAME
-    existing_profile = _snapshot(profile_path)
-    if existing_profile is not None:
-        profile = _load_profile(profile_path)
-        if (profile["workspace"], profile["url"], profile["keychain_instance"]) != (workspace, url, instance):
-            raise ClientError("Project is already bound to another workspace, service or Keychain instance.")
-        _verify(project, profile)
-        if keychain.get(instance, "agent") != token:
-            raise ClientError("The existing project credential does not match; resolve it in the secure store.")
-        return profile
+
+def _prepare_binding(project, workspace, url, instance):
     _check_logthis(project)
     codex_directory = project / ".codex"
     codex_info = _safe_path(codex_directory, directory=True)
@@ -331,52 +365,138 @@ def connect(project: Path, workspace: str, url: str, token: bytes, keychain, ins
     outputs = {".mcp.json": (json.dumps(mcp, indent=2) + "\n").encode(), ".codex/config.toml": toml.encode()}
     for relative in ("AGENTS.md", "CLAUDE.md"):
         outputs[relative] = _instructions(_text(snapshots[relative]), workspace).encode()
-    profile = {"version": 1, "workspace": workspace, "url": url, "keychain_instance": instance,
-               "managed_hashes": {relative: _digest(data) for relative, data in outputs.items()}}
+    profile = _profile(workspace, url, instance, outputs)
     outputs[PROFILE_NAME] = (json.dumps(profile, indent=2) + "\n").encode()
-    snapshots[PROFILE_NAME] = existing_profile
+    snapshots[PROFILE_NAME] = None
+    return codex_info, snapshots, outputs, profile
+
+
+def connect(project: Path, workspace: str, url: str, token: bytes, keychain, instance: str) -> dict:
+    """Bind an explicitly selected project; credentials remain solely in Keychain."""
+    project = _project(project)
+    _validate_values(workspace, url, instance)
+    _token_text(token)
+    profile_path = project / PROFILE_NAME
+    existing_profile = _snapshot(profile_path)
+    if existing_profile is not None:
+        profile = _load_profile(profile_path)
+        if (profile["workspace"], profile["url"], profile["keychain_instance"]) != (workspace, url, instance):
+            raise ClientError("Project is already bound to another workspace, service or Keychain instance.")
+        data = _verify(project, profile, allow_legacy_edits=True)
+        if keychain.get(instance, "agent") != token:
+            raise ClientError("The existing project credential does not match; use reconnect with a fresh Keychain instance for rotation.")
+        if profile["version"] == 1:
+            profile = _profile(workspace, url, instance, data)
+            with _binding_lock(project):
+                _replace(profile_path, existing_profile, (json.dumps(profile, indent=2) + "\n").encode())
+        return profile
+    codex_directory = project / ".codex"
+    codex_info, snapshots, outputs, profile = _prepare_binding(project, workspace, url, instance)
     stored = keychain.get(instance, "agent")
     if stored is not None and stored != token:
         raise ClientError("The selected Keychain instance has a different agent credential.")
     # Serialize installer instances. External edits are checked again before every replace.
+    written = []
+    created_codex = False
+    with _binding_lock(project):
+        try:
+            if codex_info is None:
+                codex_directory.mkdir(mode=0o700)
+                created_codex = True
+            for relative, data in outputs.items():
+                path = project / relative
+                _replace(path, snapshots[relative], data)
+                written.append((path, _snapshot(path), snapshots[relative]))
+            keychain.put(instance, "agent", token)
+        except BaseException:
+            # Restore only our own bytes; preserve any newer user edit.
+            for path, after, before in reversed(written):
+                try:
+                    unchanged = _snapshot(path) == after
+                except (ClientError, OSError):
+                    unchanged = False
+                if unchanged:
+                    if before is None:
+                        path.unlink()
+                    else:
+                        _replace(path, after, before[3])
+            if created_codex:
+                try:
+                    codex_directory.rmdir()
+                except OSError:
+                    pass
+            raise
+    return profile
+
+
+@contextmanager
+def _binding_lock(project):
     lock_path = project / ".agent-memory-connect.lock"
     try:
         lock = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except FileExistsError:
         raise ClientError("Another project binding is active; inspect its lock before retrying.") from None
     os.close(lock)
-    written = []
-    created_codex = False
     try:
-        if codex_info is None:
-            codex_directory.mkdir(mode=0o700)
-            created_codex = True
-        for relative, data in outputs.items():
-            path = project / relative
-            _replace(path, snapshots[relative], data)
-            written.append((path, _snapshot(path), snapshots[relative]))
-        keychain.put(instance, "agent", token)
-    except BaseException:
-        # Restore only our own bytes; preserve any newer user edit.
-        for path, after, before in reversed(written):
-            try:
-                unchanged = _snapshot(path) == after
-            except (ClientError, OSError):
-                unchanged = False
-            if unchanged:
-                if before is None:
-                    path.unlink()
-                else:
-                    _replace(path, after, before[3])
-        if created_codex:
-            try:
-                codex_directory.rmdir()
-            except OSError:
-                pass
-        raise
+        yield
     finally:
         lock_path.unlink()
-    return profile
+
+
+def reconnect(project: Path, workspace: str, url: str, token: bytes, keychain, instance: str) -> dict:
+    """Explicitly re-key the same business binding using a fresh immutable item."""
+    project = _project(project)
+    _validate_values(workspace, url, instance)
+    _token_text(token)
+    profile_path = project / PROFILE_NAME
+    before = _snapshot(profile_path)
+    profile = _load_profile(profile_path)
+    if (profile["workspace"], profile["url"]) != (workspace, url):
+        raise ClientError("Reconnect cannot change the business workspace or MCP service URL.")
+    if instance == profile["keychain_instance"]:
+        raise ClientError("Rotation requires a fresh Keychain instance; existing items are immutable.")
+    data = _verify(project, profile, allow_legacy_edits=True)
+    stored = keychain.get(instance, "agent")
+    if stored is not None and stored != token:
+        raise ClientError("The selected Keychain instance already contains another agent credential.")
+    replacement = _profile(workspace, url, instance, data)
+    with _binding_lock(project):
+        if _snapshot(profile_path) != before:
+            raise ClientError("Project binding changed concurrently; no rotation was performed.")
+        keychain.put(instance, "agent", token)
+        _replace(profile_path, before, (json.dumps(replacement, indent=2) + "\n").encode())
+    return replacement
+
+
+def check_connection(project: Path, workspace: str, url: str, keychain, instance: str,
+                     expected_uid: int, rekey: bool = False) -> dict:
+    """Read-only sink preflight before a human mints a cross-UID credential.
+
+    An unlocked default Keychain does not prove future per-item ACL access.
+    The actual connect/reconnect still fails closed if an item cannot be stored.
+    """
+    if type(expected_uid) is not int or expected_uid < 501 or os.getuid() != expected_uid:
+        raise ClientError("Connection preflight must run as the explicitly selected non-root coding user.")
+    if type(rekey) is not bool:
+        raise ClientError("Connection preflight needs an explicit reconnect choice.")
+    project = _project(project)
+    _validate_values(workspace, url, instance)
+    path = project / PROFILE_NAME
+    if _snapshot(path) is None:
+        if rekey:
+            raise ClientError("Reconnect requires an existing business-memory project binding.")
+        _prepare_binding(project, workspace, url, instance)
+    else:
+        profile = _load_profile(path)
+        if (profile["workspace"], profile["url"]) != (workspace, url):
+            raise ClientError("Connection preflight cannot redirect the existing business workspace or service.")
+        if rekey == (instance == profile["keychain_instance"]):
+            raise ClientError("Use the current instance for connect or a fresh instance for reconnect.")
+        _verify(project, profile, allow_legacy_edits=True)
+    keychain.check_ready()
+    return {"ready": True, "coding_uid": expected_uid, "workspace": workspace,
+            "changes_made": False, "credential_received": False,
+            "default_keychain_unlocked": True, "item_access_verified": False}
 
 
 def run(profile: Path, argv: list, keychain) -> int:
