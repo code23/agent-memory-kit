@@ -15,6 +15,42 @@ class SecurityError(RuntimeError):
     """Fixed diagnostic codes, without local names or filesystem paths."""
 
 
+class _DarwinStatFS64(ctypes.Structure):
+    # Darwin sys/mount.h __DARWIN_STRUCT_STATFS64; explicit fstatfs64 ABI.
+    # Native SDK probe verifies size 2168, f_flags offset 64, MAXPATHLEN 1024.
+    _fields_ = [
+        ("f_bsize", ctypes.c_uint32), ("f_iosize", ctypes.c_int32),
+        ("f_blocks", ctypes.c_uint64), ("f_bfree", ctypes.c_uint64),
+        ("f_bavail", ctypes.c_uint64), ("f_files", ctypes.c_uint64),
+        ("f_ffree", ctypes.c_uint64), ("f_fsid", ctypes.c_int32 * 2),
+        ("f_owner", ctypes.c_uint32), ("f_type", ctypes.c_uint32),
+        ("f_flags", ctypes.c_uint32), ("f_fssubtype", ctypes.c_uint32),
+        ("f_fstypename", ctypes.c_char * 16),
+        ("f_mntonname", ctypes.c_char * 1024),
+        ("f_mntfromname", ctypes.c_char * 1024),
+        ("f_flags_ext", ctypes.c_uint32), ("f_reserved", ctypes.c_uint32 * 7),
+    ]
+
+
+def _check_volume(fd: int) -> None:
+    """Ownership comparisons are meaningful only on ownership-enforcing mounts."""
+    if sys.platform != "darwin":
+        raise SecurityError("MACOS_REQUIRED")
+    try:
+        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        libc.fstatfs64.argtypes = [ctypes.c_int, ctypes.POINTER(_DarwinStatFS64)]
+        libc.fstatfs64.restype = ctypes.c_int
+        volume = _DarwinStatFS64()
+        if libc.fstatfs64(fd, ctypes.byref(volume)) != 0:
+            raise SecurityError("VOLUME_CHECK_FAILED")
+        if volume.f_flags & 0x00200000:  # sys/mount.h MNT_IGNORE_OWNERSHIP
+            raise SecurityError("OWNERSHIP_DISABLED_VOLUME")
+    except SecurityError:
+        raise
+    except (OSError, AttributeError, TypeError):
+        raise SecurityError("VOLUME_CHECK_FAILED") from None
+
+
 def validate_workspace(value: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,39}", value):
         raise SecurityError("INVALID_WORKSPACE")
@@ -104,7 +140,7 @@ def _safe_ancestor(info, owner_uid: int) -> None:
         raise SecurityError("UNSAFE_ANCESTOR_MODE")
 
 
-def _private_directory(path: Path, owner_uid: int, create: bool) -> None:
+def _private_directory(path: Path, owner_uid: int, create: bool, checkout_identity=None) -> None:
     path = _absolute(path)
     if not isinstance(owner_uid, int) or owner_uid < 1:
         raise SecurityError("INVALID_OWNER")
@@ -113,9 +149,12 @@ def _private_directory(path: Path, owner_uid: int, create: bool) -> None:
     try:
         fd = os.open("/", _open_flags())
         descriptors.append(fd)
+        _check_volume(fd)
         current = Path("/")
         for index, component in enumerate(path.parts[1:]):
             parent = os.fstat(fd)
+            if (parent.st_dev, parent.st_ino) == checkout_identity:
+                raise SecurityError("PRIVATE_ROOT_IN_CHECKOUT")
             _safe_ancestor(parent, owner_uid)
             _check_acl(fd)
             current = current / component
@@ -133,7 +172,10 @@ def _private_directory(path: Path, owner_uid: int, create: bool) -> None:
                 child = os.open(component, _open_flags(), dir_fd=fd)
             fd = child
             descriptors.append(fd)
+            _check_volume(fd)
             info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) == checkout_identity:
+                raise SecurityError("PRIVATE_ROOT_IN_CHECKOUT")
             snapshots.append((current, info.st_dev, info.st_ino))
             if last:
                 if info.st_uid != owner_uid or stat.S_IMODE(info.st_mode) != 0o700:
@@ -162,10 +204,18 @@ def ensure_private_directory(path: Path, owner_uid: int) -> None:
 def assert_private_root(path: Path, kit_root: Path, owner_uid: int) -> None:
     """Read-only preflight for an existing root or its safe existing ancestors."""
     path = _absolute(path)
-    kit_root = Path(kit_root).resolve()
-    if path == kit_root or kit_root in path.parents:
-        raise SecurityError("PRIVATE_ROOT_IN_CHECKOUT")
-    _private_directory(path, owner_uid, create=False)
+    try:
+        kit_root = Path(kit_root).resolve(strict=True)
+        descriptor = os.open(kit_root, _open_flags())
+        try:
+            _check_volume(descriptor)
+            info = os.fstat(descriptor)
+            checkout_identity = (info.st_dev, info.st_ino)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        raise SecurityError("CHECKOUT_UNAVAILABLE") from None
+    _private_directory(path, owner_uid, create=False, checkout_identity=checkout_identity)
 
 
 def coding_identity(name: str, current_uid: int) -> dict:
@@ -179,6 +229,8 @@ def coding_identity(name: str, current_uid: int) -> dict:
         groups = set(os.getgrouplist(account.pw_name, account.pw_gid))
         # Include the primary group explicitly even on unusual directory services.
         groups.add(account.pw_gid)
+        if groups & {0, 80}:
+            raise SecurityError("STANDARD_CODING_ACCOUNT_REQUIRED")
         for group_id in groups:
             grp.getgrgid(group_id)
         return {"name": account.pw_name, "uid": account.pw_uid,
@@ -198,6 +250,8 @@ def assert_not_agent_writable(path: Path, identity: dict) -> None:
         groups.add(identity["gid"])
         if not isinstance(uid, int) or uid < 501:
             raise SecurityError("INVALID_CODING_IDENTITY")
+        if groups & {0, 80}:
+            raise SecurityError("STANDARD_CODING_ACCOUNT_REQUIRED")
         descriptors = []
         snapshots = []
         try:
@@ -213,6 +267,7 @@ def assert_not_agent_writable(path: Path, identity: dict) -> None:
                     fd = os.open(component, flags, dir_fd=fd)
                     descriptors.append(fd)
                 info = os.fstat(fd)
+                _check_volume(fd)
                 if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
                     raise SecurityError("UNSAFE_SOFTWARE_TYPE")
                 snapshots.append((current, info.st_dev, info.st_ino))

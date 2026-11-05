@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from memory_kit.keychain import MacKeychain, SecretStoreError, _NativeKeychain, validate_instance
 from memory_kit.security import (
-    SecurityError, _check_acl, assert_not_agent_writable, assert_private_root,
+    SecurityError, _DarwinStatFS64, _check_acl, _check_volume, assert_not_agent_writable, assert_private_root,
     coding_identity, ensure_private_directory, validate_workspace,
 )
 
@@ -179,10 +179,14 @@ class DirectoryTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.uid = os.getuid()
+        (self.root / "checkout").mkdir(mode=0o700)
         # Native ACL behavior is tested separately; these fixtures are portable.
         self.acl = patch("memory_kit.security._check_acl")
         self.acl.start()
         self.addCleanup(self.acl.stop)
+        self.volume = patch("memory_kit.security._check_volume")
+        self.volume.start()
+        self.addCleanup(self.volume.stop)
 
     def test_workspace_slug_and_uuid_rejection(self):
         for value in ("sample", "sample-team-2", "ab", "x" * 40):
@@ -220,7 +224,7 @@ class DirectoryTests(unittest.TestCase):
 
     def test_rejects_wrong_owner_and_writable_ancestors(self):
         path = self.root / "private"
-        path.mkdir(mode=0o700)
+        path.mkdir(mode=0o700, exist_ok=True)
         with self.assertRaises(SecurityError):
             ensure_private_directory(path, self.uid + 10000)
         self.root.chmod(0o777)
@@ -246,7 +250,6 @@ class DirectoryTests(unittest.TestCase):
 
     def test_root_is_outside_checkout_and_missing_root_is_read_only(self):
         path = self.root / "checkout"
-        path.mkdir(mode=0o700)
         for candidate in (path, path / "private"):
             with self.assertRaisesRegex(SecurityError, "^PRIVATE_ROOT_IN_CHECKOUT$"):
                 assert_private_root(candidate, path, self.uid)
@@ -274,6 +277,26 @@ class DirectoryTests(unittest.TestCase):
         with patch("memory_kit.security.pwd.getpwnam", side_effect=KeyError):
             with self.assertRaisesRegex(SecurityError, "^CODING_ACCOUNT_UNAVAILABLE$"):
                 coding_identity("missing-test-account", 700)
+
+    def test_coding_identity_rejects_privileged_groups(self):
+        account = SimpleNamespace(pw_name="test-coder", pw_uid=750, pw_gid=751)
+        for group in (0, 80):
+            with self.subTest(group=group), \
+                    patch("memory_kit.security.pwd.getpwnam", return_value=account), \
+                    patch("memory_kit.security.os.getgrouplist", return_value=[751, group]), \
+                    self.assertRaisesRegex(SecurityError, "^STANDARD_CODING_ACCOUNT_REQUIRED$"):
+                coding_identity("test-coder", 700)
+            with self.assertRaisesRegex(SecurityError, "^STANDARD_CODING_ACCOUNT_REQUIRED$"):
+                assert_not_agent_writable(self.root / "checkout", {"uid": 750, "gid": 751, "groups": [group]})
+
+    def test_both_walks_reject_untrusted_volume_before_mutation(self):
+        self.volume.stop()
+        with patch("memory_kit.security._check_volume", side_effect=SecurityError("OWNERSHIP_DISABLED_VOLUME")):
+            with self.assertRaisesRegex(SecurityError, "^OWNERSHIP_DISABLED_VOLUME$"):
+                ensure_private_directory(self.root / "missing", self.uid)
+            with self.assertRaisesRegex(SecurityError, "^OWNERSHIP_DISABLED_VOLUME$"):
+                assert_not_agent_writable(self.root / "checkout", {"uid": 750, "gid": 751, "groups": []})
+        self.assertFalse((self.root / "missing").exists())
 
     def test_source_software_cannot_be_coder_writable(self):
         path = self.root / "source"
@@ -382,6 +405,7 @@ class ACLTests(unittest.TestCase):
         # No patched security guard: exercise real dirfd, ownership and ACLs.
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
+            (root / "checkout").mkdir(mode=0o700)
             target = root / "Application Support" / "Memory Kit" / "sample"
             assert_private_root(target, root / "checkout", os.getuid())
             self.assertFalse((root / "Application Support").exists())
@@ -392,6 +416,7 @@ class ACLTests(unittest.TestCase):
     def test_actual_missing_root_still_rejects_unsafe_ancestor_and_symlink(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
+            (root / "checkout").mkdir(mode=0o700)
             unsafe = root / "unsafe"
             unsafe.mkdir(mode=0o777)
             unsafe.chmod(0o777)
@@ -405,6 +430,48 @@ class ACLTests(unittest.TestCase):
                 assert_private_root(link / "missing", root / "checkout", os.getuid())
             self.assertFalse((unsafe / "missing").exists())
             self.assertFalse((safe / "missing").exists())
+
+    @unittest.skipUnless(sys.platform == "darwin", "native macOS case-alias check")
+    def test_actual_checkout_case_alias_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            checkout = root / "CheckOut"
+            checkout.mkdir(mode=0o700)
+            alias = root / "cHECKoUT"
+            if not alias.exists():
+                self.skipTest("fixture volume is case sensitive")
+            self.assertNotEqual(str(checkout), str(alias))
+            with self.assertRaisesRegex(SecurityError, "^PRIVATE_ROOT_IN_CHECKOUT$"):
+                assert_private_root(alias / "private", checkout, os.getuid())
+            self.assertFalse((checkout / "private").exists())
+
+
+class VolumeTests(unittest.TestCase):
+    def test_native_header_layout_and_ownership_flags(self):
+        self.assertEqual(ctypes.sizeof(_DarwinStatFS64), 2168)
+        self.assertEqual(_DarwinStatFS64.f_flags.offset, 64)
+        for flags, status, expected in ((0, 0, None), (0x00200000, 0, "OWNERSHIP_DISABLED_VOLUME"),
+                                         (0, -1, "VOLUME_CHECK_FAILED")):
+            with self.subTest(flags=flags, status=status):
+                def get_volume(fd, output):
+                    ctypes.cast(output, ctypes.POINTER(_DarwinStatFS64))[0].f_flags = flags
+                    return status
+                libc = SimpleNamespace(fstatfs64=Callable(get_volume))
+                with patch("memory_kit.security.sys.platform", "darwin"), \
+                        patch("memory_kit.security.ctypes.CDLL", return_value=libc):
+                    if expected:
+                        with self.assertRaisesRegex(SecurityError, "^" + expected + "$"):
+                            _check_volume(8)
+                    else:
+                        _check_volume(8)
+
+    @unittest.skipUnless(sys.platform == "darwin", "native read-only macOS volume check")
+    def test_actual_native_root_volume(self):
+        descriptor = os.open("/", os.O_RDONLY)
+        try:
+            _check_volume(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 if __name__ == "__main__":
