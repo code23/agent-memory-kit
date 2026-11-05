@@ -72,7 +72,7 @@ The service exposes `http://127.0.0.1:47892/mcp`. PostgreSQL uses a Unix socket 
 
 `start` loads the owner LaunchAgent and enables start at login. A loaded job alone is not a healthy-service check. `status` distinguishes loaded service, running PostgreSQL and start-at-login configuration. `stop` drains the owned service/database and removes start-at-login configuration. Run `start` explicitly to enable it again; unrelated services must remain untouched.
 
-After a Python package update, inspect `autostart_python_missing` in `status` and run `start` again if the recorded executable disappeared. If its configured Python selector is also gone and `start` refuses, run `stop`, then repeat the same candidate's `install` command under the available supported Python to refresh that selector. An unknown PostgreSQL state is not reported as stopped: restore the required PostgreSQL 18 tools before attempting recovery.
+After a Python package update, inspect `autostart_python_missing` in `status` and run `start` again if the recorded executable disappeared. If its configured Python selector is also gone and `start` refuses, run `stop`, then repeat the same candidate's `install` command under the available supported Python to refresh that selector. Then run `start` and confirm with `status`. An unknown PostgreSQL state is not reported as stopped: restore the required PostgreSQL 18 tools before attempting recovery.
 
 ## Bind the coding project
 
