@@ -287,6 +287,31 @@ class ClientTests(unittest.TestCase):
                 with self.subTest(candidate=name), self.assertRaises(client.ClientError):
                     self.connect(project=candidate)
 
+    def test_symlinked_global_configuration_target_is_not_a_project(self):
+        target = self.base / "dotfiles"
+        target.mkdir()
+        (self.home / ".claude").symlink_to(target, target_is_directory=True)
+        with self.assertRaises(client.ClientError):
+            self.connect(project=target)
+        self.assertEqual(list(target.iterdir()), [])
+
+    def test_codex_approval_rules_do_not_block_native_child(self):
+        path = self.home / ".codex/rules"
+        path.mkdir(parents=True)
+        (path / "default.rules").write_text("prefix_rule fixture")
+        self.connect()
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+            self.assertEqual(client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain), 0)
+
+    def test_routing_collision_does_not_cross_newlines_and_names_file(self):
+        path = self.project / "AGENTS.md"
+        path.write_text("## Audit log\n\nThis section explains records.\n")
+        self.connect()
+        with path.open("a") as handle:
+            handle.write("\nAlways log this value.\n")
+        with self.assertRaisesRegex(client.ClientError, "AGENTS.md"):
+            client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+
     def test_case_alias_identity_is_rejected_even_when_path_spelling_differs(self):
         real_identity = client._identity
         def identity(path):

@@ -3,6 +3,14 @@
 The client installer requires Python 3.11 or later and uses the standard library
 TOML parser to validate existing Codex configuration without rewriting it.
 
+This remains an unaccepted compatibility candidate. It requires a coding profile
+with no global instruction files or Claude rules, and a project without alternate
+instruction overrides/rules or competing capture commands. Existing contexts
+with those paths are unsupported. There is no recorded-review or reviewed-handoff
+implementation that permits them. Keep all existing files intact; use a separately
+authorized clean coding profile/project context or report the compatibility gap.
+The existing three-model launchers and their routing source are untouched.
+
 The installer appends a managed block to the selected project's `AGENTS.md` and
 `CLAUDE.md`. It binds the existing `logthis` entrypoint to one explicit business
 workspace; it does not install another command or copy a private skill.
@@ -34,9 +42,11 @@ unsupported; there is no token-based legacy upgrade path.
 
 Both `log this` and `logthis` name the same existing entrypoint. The installer
 also refuses ambiguous `log-this` and `log_this` routing. These are explicit
-command-collision checks, not judgments about the meaning of arbitrary prose.
-Project/ancestor override paths, additional rule paths and inherited bindings
-need explicit review before binding. Governing instruction paths outside the
+literal command-collision checks: unrelated text such as "always log this value"
+is conservatively refused too. Matches do not cross newlines; errors name the
+instruction file. Project/ancestor override paths, Claude rule paths and inherited
+bindings are unsupported. Codex command-approval rules are permitted.
+Governing instruction paths outside the
 selected repository are checked by existence; private bodies are not read.
 
 The load-path checks follow the official [Claude instruction documentation](https://code.claude.com/docs/en/memory)
@@ -47,8 +57,10 @@ trusted by the coding user before Codex will load it. These documented paths and
 the child fixture's working-directory/file checks are not a real-client loading
 or two-user acceptance test.
 
-Credential-variable reuse is refused in selected project and repository-ancestor
-client configuration outside the managed server. Existing global model settings
+Credential-variable reuse is refused specifically in `.mcp.json` and
+`.codex/config.toml` in the selected project and repository ancestors outside the
+managed server. Claude settings/hooks and other configuration files are not
+scanned. Existing global model settings
 are preserved and their private bodies are not inspected. This binding does not
 protect its agent credential from unrestricted code running as the same coding
 UID or from that user's independently configured global client behavior.
@@ -151,3 +163,9 @@ review instead. Revoke the failed transfer's server token by its nonsecret
 metadata/unique label. An unused immutable Keychain item may remain; choose a
 fresh instance for the next attempt. Rerun the nonsecret preflight only after
 the project diff is understood and the partial state is resolved.
+
+If an otherwise intact binding stops because a global instruction file or an
+alternate project rule was added, keep that file and all binding files intact.
+This candidate cannot approve or adopt that context. Use a separately authorized
+clean coding profile/project context, or leave this integration stopped pending
+a compatibility implementation; do not delete global instructions to make it run.

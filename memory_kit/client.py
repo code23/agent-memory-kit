@@ -25,7 +25,7 @@ END = "<!-- /agent-memory:business:v1 -->"
 TOML_BEGIN = "# agent-memory:business:v1"
 TOML_END = "# /agent-memory:business:v1"
 _FILES = (".mcp.json", ".codex/config.toml", "AGENTS.md", "CLAUDE.md")
-_ROUTING = re.compile(r"\blog[\s_-]*this\b", re.IGNORECASE)
+_ROUTING = re.compile(r"\blog[ \t_-]*this\b", re.IGNORECASE)
 _LOCK = ".agent-memory-connect.lock"
 
 
@@ -183,7 +183,7 @@ def _project(project):
 
 def _identity(path):
     try:
-        info = Path(path).stat(follow_symlinks=False)
+        info = Path(path).stat()
         return info.st_dev, info.st_ino
     except FileNotFoundError:
         return None
@@ -209,11 +209,7 @@ def _instruction_roots(project):
 def _check_logthis(project):
     # Inspect existence only. Private skill contents are never opened or copied.
     roots = (project,) + tuple(project.parents)
-    scoped = []
-    for root in _instruction_roots(project):
-        scoped.append(root)
-        if os.path.lexists(str(root / ".git")):
-            break
+    scoped = list(_instruction_roots(project))
     if not any(os.path.lexists(str(root / ".git")) for root in scoped):
         scoped = [project]
     prefixes = (".agents/skills", ".codex/skills", ".claude/skills", ".claude/commands",
@@ -222,10 +218,13 @@ def _check_logthis(project):
                   for name in ("logthis", "log-this", "log_this", "log this") for suffix in ("", ".md")]
     if any(os.path.lexists(str(root / relative)) for root in (_home(),) + roots for relative in candidates):
         raise ClientError("An existing log this/logthis command path needs an explicit business-memory handoff before binding.")
-    for native_home in _client_homes():
+    for index, native_home in enumerate(_client_homes()):
+        instruction_paths = ("AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md")
+        if index == 1:
+            instruction_paths += ("rules",)
         if any(os.path.lexists(str(native_home / relative)) for relative in
-               ("AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md", "rules")):
-            raise ClientError("A global client instruction path needs an explicitly reviewed handoff; private instruction bodies were not read.")
+               instruction_paths):
+            raise ClientError("This candidate does not support existing global instruction files or Claude rules. Keep them intact and use a separate clean coding profile.")
         if any(os.path.lexists(str(native_home / prefix / (name + suffix)))
                for prefix in ("skills", "commands", "prompts")
                for name in ("logthis", "log-this", "log_this", "log this") for suffix in ("", ".md")):
@@ -236,10 +235,10 @@ def _check_logthis(project):
         if root not in scoped:
             if any(os.path.lexists(str(root / relative)) for relative in
                    ("AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md", ".claude/rules")):
-                raise ClientError("A governing instruction path outside this project needs an explicitly reviewed handoff; private instruction bodies were not read.")
+                raise ClientError("This candidate does not support governing instruction files outside the repository. Keep them intact and select a clean project context.")
             continue
         if os.path.lexists(str(root / "AGENTS.override.md")) or os.path.lexists(str(root / ".claude/rules")):
-            raise ClientError("Project or ancestor override/rules paths need explicit instruction review before binding.")
+            raise ClientError("This candidate does not support AGENTS.override.md or .claude/rules. Keep them intact and select a clean project context.")
         for relative in ("AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md"):
             if root == project and relative in ("AGENTS.md", "CLAUDE.md"):
                 continue
@@ -269,11 +268,11 @@ def _binding(workspace):
     ))
 
 
-def _instructions(old, workspace):
+def _instructions(old, workspace, filename):
     if BEGIN in old or END in old:
         raise ClientError("An unmanaged or incomplete business-memory instruction block already exists.")
     if _ROUTING.search(old):
-        raise ClientError("Project instructions already define logthis; resolve their business-memory handoff explicitly before binding.")
+        raise ClientError(filename + " contains ambiguous log this/logthis text; this candidate refuses that instruction context without changing it.")
     return (old + ("\n" if old.endswith("\n") else "\n\n") if old else "") + _binding(workspace) + "\n"
 
 
@@ -345,7 +344,7 @@ def _managed_parts(data, workspace, url):
         if region != _binding(workspace):
             raise ClientError("The managed instruction binding is inconsistent with its profile.")
         if _ROUTING.search(outside):
-            raise ClientError("Project instructions define another logthis workflow; resolve its business-memory handoff explicitly.")
+            raise ClientError(relative + " contains ambiguous log this/logthis text outside the managed block; this candidate refuses that instruction context without changing it.")
         parts[relative] = region.encode()
     return parts
 
@@ -452,7 +451,7 @@ def _prepare_binding(project, workspace, url, instance):
         raise ClientError("Existing Codex MCP namespace cannot safely accept a new table; inspect it before binding.") from None
     outputs = {".mcp.json": (json.dumps(mcp, indent=2) + "\n").encode(), ".codex/config.toml": toml.encode()}
     for relative in ("AGENTS.md", "CLAUDE.md"):
-        outputs[relative] = _instructions(_text(snapshots[relative]), workspace).encode()
+        outputs[relative] = _instructions(_text(snapshots[relative]), workspace, relative).encode()
     profile = _profile(workspace, url, instance, outputs)
     outputs[PROFILE_NAME] = (json.dumps(profile, indent=2) + "\n").encode()
     snapshots[PROFILE_NAME] = None
@@ -471,7 +470,7 @@ def connect(project: Path, workspace: str, url: str, token: bytes, keychain, ins
         profile = _load_profile(profile_path)
         if (profile["workspace"], profile["url"], profile["keychain_instance"]) != (workspace, url, instance):
             raise ClientError("Project is already bound to another workspace, service or Keychain instance.")
-        data = _verify(project, profile)
+        _verify(project, profile)
         if keychain.get(instance, "agent") != token:
             raise ClientError("The existing project credential does not match; use reconnect with a fresh Keychain instance for rotation.")
         return profile
@@ -601,8 +600,8 @@ def check_connection(project: Path, workspace: str, url: str, keychain, instance
         profile = _load_profile(path)
         if (profile["workspace"], profile["url"]) != (workspace, url):
             raise ClientError("Connection preflight cannot redirect the existing business workspace or service.")
-        if rekey == (instance == profile["keychain_instance"]):
-            raise ClientError("Use the current instance for connect or a fresh instance for reconnect.")
+        if instance == profile["keychain_instance"]:
+            raise ClientError("Reconnect preflight requires a fresh Keychain instance.")
         _verify(project, profile)
     keychain.check_ready()
     return {"ready": True, "coding_uid": expected_uid, "workspace": workspace,
