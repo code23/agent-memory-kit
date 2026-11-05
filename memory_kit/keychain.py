@@ -15,6 +15,13 @@ class SecretStoreError(RuntimeError):
     """A safe, fixed diagnostic; never includes native output or secret bytes."""
 
 
+def validate_instance(value: str) -> str:
+    """Validate the shared Keychain namespace before any binding mutation."""
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", value):
+        raise SecretStoreError("KEYCHAIN_INVALID_INSTANCE")
+    return value
+
+
 class _NativeKeychain:
     NOT_FOUND = -25300
     DUPLICATE = -25299
@@ -97,10 +104,7 @@ class MacKeychain:
 
     @staticmethod
     def _names(instance: str, key: str):
-        if not isinstance(instance, str) or not re.fullmatch(
-            r"[a-z0-9][a-z0-9_-]{0,39}", instance
-        ):
-            raise SecretStoreError("KEYCHAIN_INVALID_INSTANCE")
+        validate_instance(instance)
         if not isinstance(key, str) or not re.fullmatch(r"[a-z0-9_-]{1,64}", key):
             raise SecretStoreError("KEYCHAIN_INVALID_KEY")
         return ("org.code23.agent-memory-kit." + instance).encode("ascii"), key.encode("ascii")

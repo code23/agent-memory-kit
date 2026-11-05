@@ -16,9 +16,9 @@ class SecurityError(RuntimeError):
 
 
 def validate_workspace(value: str) -> str:
-    if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", value):
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,39}", value):
         raise SecurityError("INVALID_WORKSPACE")
-    if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value):
+    if re.fullmatch(r"[0-9a-f]{32}", value):
         raise SecurityError("INVALID_WORKSPACE")
     return value
 

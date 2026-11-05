@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from memory_kit.keychain import MacKeychain, SecretStoreError, _NativeKeychain
+from memory_kit.keychain import MacKeychain, SecretStoreError, _NativeKeychain, validate_instance
 from memory_kit.security import (
     SecurityError, _check_acl, assert_not_agent_writable, assert_private_root,
     coding_identity, ensure_private_directory, validate_workspace,
@@ -117,6 +117,15 @@ class KeychainTests(unittest.TestCase):
             with self.assertRaises(SecretStoreError):
                 self.store.put("sample", "agent", value)
 
+    def test_shared_instance_validation_matches_store_namespace(self):
+        for value in ("sample", "sample_2", "0", "x" * 40,
+                      "12345678-abcd-1234-abcd-123456789abc"):
+            self.assertEqual(validate_instance(value), value)
+            self.assertIsNone(self.store.get(value, "agent"))
+        for value in ("", "UPPER", "sample.name", "x" * 41, None):
+            with self.assertRaisesRegex(SecretStoreError, "^KEYCHAIN_INVALID_INSTANCE$"):
+                validate_instance(value)
+
     def test_native_store_requires_macos(self):
         with patch("memory_kit.keychain.sys.platform", "linux"):
             with self.assertRaisesRegex(SecretStoreError, "^KEYCHAIN_MACOS_REQUIRED$"):
@@ -135,9 +144,10 @@ class DirectoryTests(unittest.TestCase):
         self.addCleanup(self.acl.stop)
 
     def test_workspace_slug_and_uuid_rejection(self):
-        for value in ("sample", "sample-team_2", "0", "x" * 40):
+        for value in ("sample", "sample-team-2", "ab", "x" * 40):
             self.assertEqual(validate_workspace(value), value)
         for value in ("", "Sample", "../sample", "_sample", "sample/name", "x" * 41,
+                      "sample_team", "0", "a", "0sample", "a" * 32, "0" * 32,
                       "12345678-abcd-1234-abcd-123456789abc", None):
             with self.subTest(value=value), self.assertRaises(SecurityError):
                 validate_workspace(value)
