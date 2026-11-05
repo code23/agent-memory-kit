@@ -72,7 +72,7 @@ class HostTests(unittest.TestCase):
                           "owner_uid": self.uid, "root": str(self.root), "kit": str(self.kit),
                           "pg_bin": str(self.pg_dir), "node": "/opt/example/node",
                           "python": "/opt/example/python", "software_hash": host.software_hash(self.kit),
-                          "existing": None}
+                          "existing": None, "pg_tools": {name: str(self.pg_dir / name) for name in ("initdb", "pg_ctl", "psql", "postgres")}}
 
     def command(self, argv, **kwargs):
         argv = [str(item) for item in argv]
@@ -92,7 +92,9 @@ class HostTests(unittest.TestCase):
     def install(self):
         result = host.install(self.preflight, self.store)
         self.assertTrue(result["installed"])
-        return json.loads((self.root / "config.json").read_text())
+        config = json.loads((self.root / "config.json").read_text())
+        config["pg_tools"] = self.preflight["pg_tools"]
+        return config
 
     def plan(self):
         def versions(argv, **kwargs):
@@ -405,6 +407,36 @@ class HostTests(unittest.TestCase):
                 host.stop(config)
         self.assertFalse(path.exists())
         self.assertTrue(any(argv[1:2] == ["bootout"] for argv, kwargs in self.calls))
+
+    @unittest.skipUnless(host.platform.system() == "Darwin", "native macOS symlink chain check")
+    def test_native_protected_outer_link_refuses_group_writable_middle_hop(self):
+        outer = self.base / "outer"
+        middle = self.base / "middle"
+        outer.mkdir(mode=0o700)
+        middle.mkdir(mode=0o770)
+        middle.chmod(0o770)
+        target = Path(host.sys.executable).resolve()
+        (middle / "node").symlink_to(target)
+        (outer / "node").symlink_to(middle / "node")
+        self.writable.side_effect = REAL_NOT_WRITABLE
+        identity = {"uid": 99999, "gid": middle.stat().st_gid, "groups": [middle.stat().st_gid]}
+        with self.assertRaises(host.security.SecurityError):
+            host._tool(outer / "node", identity)
+        self.assertEqual(self.calls, [])
+
+    def test_actual_private_pidfile_missing_pg_tool_reports_unknown_without_execution(self):
+        config = self.install()
+        path = self.root / "postgres/postmaster.pid"
+        path.write_text("12345\n" + str(self.root / "postgres") + "\n")
+        path.chmod(0o600)
+        self.calls.clear()
+        with patch.object(host, "_coding_identity", return_value=self.identity), \
+                patch.object(host, "_plist_path", return_value=self.base / "absent.plist"):
+            self.assertEqual(host._pg_status(config).returncode, 4)
+            self.assertIsNone(host.status(config)["postgres_running"])
+            with self.assertRaises(host.HostError):
+                host.stop(config)
+        self.assertFalse(any(Path(argv[0]).name == "pg_ctl" for argv, kwargs in self.calls))
 
     def test_install_credentials_never_in_argv_or_files(self):
         config = self.install()

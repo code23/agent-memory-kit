@@ -85,6 +85,7 @@ def _write_new(path, payload):
 def _save_config(path, config, uid):
     if path.exists():
         _private_file(path, uid)
+    config = {key: value for key, value in config.items() if key != "pg_tools"}
     temporary = path.with_name(".config-" + secrets.token_hex(8))
     _write_new(temporary, (json.dumps(config, sort_keys=True, indent=2) + "\n").encode())
     os.replace(str(temporary), str(path))
@@ -123,12 +124,32 @@ def _protect_selector(path, identity):
     path = Path(path)
     if not path.is_absolute():
         raise HostError("Tool selectors must be absolute paths")
-    # Protect every symlink entry before resolving it: a safe target alone does
-    # not establish that the coding account cannot replace the selector.
-    for component in reversed((path,) + tuple(path.parents)):
-        if component.is_symlink():
-            security.assert_not_agent_writable(component.parent.resolve(strict=True), identity)
-    return path
+    pending = list(path.parts[1:])
+    current = Path("/")
+    hops = 0
+    while pending:
+        part = pending.pop(0)
+        if part == ".":
+            continue
+        if part == "..":
+            current = current.parent
+            continue
+        candidate = current / part
+        if stat.S_ISLNK(candidate.lstat().st_mode):
+            security.assert_not_agent_writable(current, identity)
+            hops += 1
+            if hops > 40:
+                raise HostError("Tool selector has a cyclic or excessive symlink chain")
+            target = Path(os.readlink(candidate))
+            if target.is_absolute():
+                current = Path("/")
+                pending = list(target.parts[1:]) + pending
+            else:
+                pending = list(target.parts) + pending
+        else:
+            current = candidate
+    security.assert_not_agent_writable(current, identity)
+    return current
 
 
 def _tool(path, identity):
@@ -210,7 +231,7 @@ def plan(workspace, coding_user, root=None, pg_bin=None, node=None, kit=None, ke
                 existing["software_hash"] != digest):
             raise HostError("Installation identity or version differs; upgrades require a recovery-backed release")
         # Never operate against a cluster that might still be serving requests.
-        if _pg_status(existing).returncode == 0:
+        if _pg_status(existing).returncode != 3:
             raise HostError("Stop this instance before installing again")
     _free_port(SERVICE_PORT)
     (keychain or MacKeychain()).check_ready()
@@ -227,7 +248,7 @@ def _software(config):
 
 
 def _pg(config, *args, check=True):
-    return command([config.get("pg_tools", {}).get("pg_ctl", str(Path(config["pg_bin"]) / "pg_ctl")), "-D", Path(config["root"]) / "postgres", *args],
+    return command([config["pg_tools"]["pg_ctl"], "-D", Path(config["root"]) / "postgres", *args],
                    check=check)
 
 
@@ -245,7 +266,8 @@ def _pg_status(config):
         if not re.search(r"\(PostgreSQL\) 18\.[0-9]+(?:\s|$)", version):
             raise HostError("PostgreSQL 18 tools are required")
         local = dict(config, pg_tools={"pg_ctl": binary})
-        return _pg(local, "status", check=False)
+        result = _pg(local, "status", check=False)
+        return SimpleNamespace(returncode=result.returncode if result.returncode in (0, 3) else 4)
     except (HostError, security.SecurityError, OSError):
         # Unknown is distinct from stopped; no unverified PID signaling.
         return SimpleNamespace(returncode=4)
@@ -345,7 +367,7 @@ def credential(config, key, keychain=None):
 
 
 def _psql(config, password, database, sql):
-    return command([config.get("pg_tools", {}).get("psql", str(Path(config["pg_bin"]) / "psql")), "-X", "--no-password",
+    return command([config["pg_tools"]["psql"], "-X", "--no-password",
                     "-v", "ON_ERROR_STOP=1", "-h", str(_socket_directory(config)), "-p", str(PG_PORT),
                     "-U", ROLES["bootstrap"], "-d", database],
                    input=sql.encode(), env={"PGPASSWORD": password})
@@ -425,7 +447,7 @@ def install(preflight, keychain=None):
         config = preflight["existing"]
         if (root / "config.json").exists():
             disk = _read_config(root, kit, uid)
-            if disk != config:
+            if disk != {key: value for key, value in config.items() if key != "pg_tools"}:
                 raise HostError("Installation changed after preflight")
         elif config is not None:
             raise HostError("Installation changed after preflight")
@@ -439,7 +461,7 @@ def install(preflight, keychain=None):
                           service_port=SERVICE_PORT, database=DATABASE, phase="prepared")
             config["owner_id"] = "owner-" + config["instance"]
             _save_config(root / "config.json", config, uid)
-        for key in ("node", "python", "pg_bin", "pg_tools"):
+        for key in ("node", "python", "python_selector", "pg_bin", "pg_tools"):
             if key in preflight:
                 config[key] = preflight[key]
         _copy_software(kit, config)
@@ -456,7 +478,7 @@ def install(preflight, keychain=None):
                 raise HostError("Existing database is missing; restore through recovery")
             staging_data = root / (".initdb-" + secrets.token_hex(16))
             try:
-                command([config.get("pg_tools", {}).get("initdb", str(Path(config["pg_bin"]) / "initdb")),
+                command([config["pg_tools"]["initdb"],
                          "-D", staging_data, "--encoding=UTF8",
                          "--auth-local=scram-sha-256", "--auth-host=scram-sha-256",
                          "--username=" + ROLES["bootstrap"], "--pwfile=/dev/stdin"],
@@ -577,7 +599,9 @@ def start(config):
 def status(config):
     result = command(["/bin/launchctl", "print", _launch_target(config)], check=False)
     pg = _pg_status(config)
-    return {"service_loaded": result.returncode == 0,
+    plist = _matching_plist(config)
+    missing_python = plist.exists() and not Path(plistlib.loads(plist.read_bytes())["ProgramArguments"][0]).is_file()
+    return {"service_loaded": result.returncode == 0, "autostart_python_missing": missing_python,
             "postgres_running": None if pg.returncode == 4 else pg.returncode == 0,
             "starts_at_login": _matching_plist(config).exists()}
 
@@ -597,8 +621,15 @@ def stop(config):
 def uninstall(config):
     stop(config)
     software = _software(config)
+    if software.parent.exists():
+        for retired in software.parent.glob(".removed-*"):
+            if not re.fullmatch(r"\.removed-[0-9a-f]{32}", retired.name):
+                continue
+            security.ensure_private_directory(retired, config["owner_uid"])
+            shutil.rmtree(str(retired))
     if not software.exists():
-        return {"uninstalled_service": True, "software_removed": True, "data_preserved": True}
+        return {"uninstalled_service": True, "software_removed": True, "data_preserved": True,
+                "configuration_and_keychain_preserved": True}
     security.ensure_private_directory(software, config["owner_uid"])
     if software_hash(software) != config["software_hash"]:
         raise HostError("Installed software differs; refusing to remove it")
