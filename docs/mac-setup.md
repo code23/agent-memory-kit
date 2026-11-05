@@ -116,4 +116,6 @@ The installation guide still needs an accepted protected backup/restore procedur
 
 ## Release gate
 
+The remaining work is tracked in the [Mac installation plan](mac-installation-plan.md).
+
 Before making this the default public client installation path, complete and rehearse the Mac setup, secure credential/identity boundary, existing-command binding, chosen coding-client configuration and recovery procedure. The three-model YOLO workflow remains intact. Automatic Drive/Dropbox ingestion and a before/after answer-quality benchmark are separate later work.
