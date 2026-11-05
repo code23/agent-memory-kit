@@ -1,0 +1,134 @@
+"""Create-only generic passwords through Apple's native Keychain API.
+
+Secret bytes never cross a subprocess boundary. A different stored value is a
+conflict, not permission to rotate or overwrite an existing installation.
+"""
+
+import ctypes
+import hmac
+import re
+import sys
+from typing import Optional
+
+
+class SecretStoreError(RuntimeError):
+    """A safe, fixed diagnostic; never includes native output or secret bytes."""
+
+
+class _NativeKeychain:
+    NOT_FOUND = -25300
+    DUPLICATE = -25299
+
+    def __init__(self, security=None, core_foundation=None):
+        if security is None:
+            if sys.platform != "darwin":
+                raise SecretStoreError("KEYCHAIN_MACOS_REQUIRED")
+            try:
+                security = ctypes.CDLL(
+                    "/System/Library/Frameworks/Security.framework/Security"
+                )
+                core_foundation = ctypes.CDLL(
+                    "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+                )
+            except OSError:
+                raise SecretStoreError("KEYCHAIN_UNAVAILABLE") from None
+        self.security = security
+        self.cf = core_foundation
+        pointer = ctypes.c_void_p
+        uint = ctypes.c_uint32
+        security.SecKeychainFindGenericPassword.argtypes = [
+            pointer, uint, pointer, uint, pointer,
+            ctypes.POINTER(uint), ctypes.POINTER(pointer), ctypes.POINTER(pointer),
+        ]
+        security.SecKeychainFindGenericPassword.restype = ctypes.c_int32
+        security.SecKeychainAddGenericPassword.argtypes = [
+            pointer, uint, pointer, uint, pointer, uint, pointer,
+            ctypes.POINTER(pointer),
+        ]
+        security.SecKeychainAddGenericPassword.restype = ctypes.c_int32
+        security.SecKeychainItemFreeContent.argtypes = [pointer, pointer]
+        security.SecKeychainItemFreeContent.restype = ctypes.c_int32
+        self.cf.CFRelease.argtypes = [pointer]
+        self.cf.CFRelease.restype = None
+
+    def find(self, service: bytes, account: bytes) -> Optional[bytes]:
+        length = ctypes.c_uint32()
+        data = ctypes.c_void_p()
+        item = ctypes.c_void_p()
+        try:
+            status = self.security.SecKeychainFindGenericPassword(
+                None, len(service), service, len(account), account,
+                ctypes.byref(length), ctypes.byref(data), ctypes.byref(item),
+            )
+            if status == self.NOT_FOUND:
+                return None
+            if status != 0:
+                raise SecretStoreError("KEYCHAIN_READ_FAILED")
+            if length.value and not data.value:
+                raise SecretStoreError("KEYCHAIN_READ_FAILED")
+            return ctypes.string_at(data, length.value) if length.value else b""
+        finally:
+            if data.value:
+                self.security.SecKeychainItemFreeContent(None, data)
+            if item.value:
+                self.cf.CFRelease(item)
+
+    def add(self, service: bytes, account: bytes, value: bytes) -> None:
+        item = ctypes.c_void_p()
+        try:
+            status = self.security.SecKeychainAddGenericPassword(
+                None, len(service), service, len(account), account,
+                len(value), value, ctypes.byref(item),
+            )
+            if status == self.DUPLICATE:
+                raise SecretStoreError("KEYCHAIN_VALUE_CONFLICT")
+            if status != 0:
+                raise SecretStoreError("KEYCHAIN_WRITE_FAILED")
+        finally:
+            if item.value:
+                self.cf.CFRelease(item)
+
+
+class MacKeychain:
+    """An injectable store; the default backend is native and macOS-only."""
+
+    def __init__(self, backend=None):
+        self._backend = backend if backend is not None else _NativeKeychain()
+
+    @staticmethod
+    def _names(instance: str, key: str):
+        if not isinstance(instance, str) or not re.fullmatch(
+            r"[a-z0-9][a-z0-9_-]{0,39}", instance
+        ):
+            raise SecretStoreError("KEYCHAIN_INVALID_INSTANCE")
+        if not isinstance(key, str) or not re.fullmatch(r"[a-z0-9_-]{1,64}", key):
+            raise SecretStoreError("KEYCHAIN_INVALID_KEY")
+        return ("org.code23.agent-memory-kit." + instance).encode("ascii"), key.encode("ascii")
+
+    def get(self, instance: str, key: str) -> Optional[bytes]:
+        service, account = self._names(instance, key)
+        try:
+            value = self._backend.find(service, account)
+            if value is not None and not isinstance(value, bytes):
+                raise SecretStoreError("KEYCHAIN_READ_FAILED")
+            return value
+        except SecretStoreError:
+            raise
+        except Exception:
+            raise SecretStoreError("KEYCHAIN_READ_FAILED") from None
+
+    def put(self, instance: str, key: str, value: bytes) -> None:
+        if not isinstance(value, bytes) or not value:
+            raise SecretStoreError("KEYCHAIN_INVALID_VALUE")
+        service, account = self._names(instance, key)
+        existing = self.get(instance, key)
+        if existing is not None:
+            if hmac.compare_digest(existing, value):
+                return
+            raise SecretStoreError("KEYCHAIN_VALUE_CONFLICT")
+        try:
+            self._backend.add(service, account, value)
+        except SecretStoreError:
+            raise
+        except Exception:
+            raise SecretStoreError("KEYCHAIN_WRITE_FAILED") from None
