@@ -58,6 +58,26 @@ class _NativeKeychain:
         self.cf.CFRelease.argtypes = [pointer]
         self.cf.CFRelease.restype = None
 
+    def check_ready(self) -> None:
+        self.security.SecKeychainCopyDefault.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        self.security.SecKeychainCopyDefault.restype = ctypes.c_int32
+        self.security.SecKeychainGetStatus.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+        self.security.SecKeychainGetStatus.restype = ctypes.c_int32
+        keychain = ctypes.c_void_p()
+        flags = ctypes.c_uint32()
+        try:
+            if self.security.SecKeychainCopyDefault(ctypes.byref(keychain)) != 0 or not keychain.value:
+                raise SecretStoreError("KEYCHAIN_UNAVAILABLE")
+            if self.security.SecKeychainGetStatus(keychain, ctypes.byref(flags)) != 0:
+                raise SecretStoreError("KEYCHAIN_READINESS_FAILED")
+            if not flags.value & 1:
+                raise SecretStoreError("KEYCHAIN_LOCKED")
+            if flags.value & 6 != 6:
+                raise SecretStoreError("KEYCHAIN_PERMISSION_DENIED")
+        finally:
+            if keychain.value:
+                self.cf.CFRelease(keychain)
+
     def find(self, service: bytes, account: bytes) -> Optional[bytes]:
         length = ctypes.c_uint32()
         data = ctypes.c_void_p()
@@ -101,6 +121,19 @@ class MacKeychain:
 
     def __init__(self, backend=None):
         self._backend = backend if backend is not None else _NativeKeychain()
+
+    def check_ready(self) -> None:
+        """Check store status without item reads, writes or unlock attempts.
+
+        This is a point-in-time check. It cannot prove an individual item's ACL
+        permits access, or guarantee the store remains unlocked for a later put.
+        """
+        try:
+            self._backend.check_ready()
+        except SecretStoreError:
+            raise
+        except Exception:
+            raise SecretStoreError("KEYCHAIN_READINESS_FAILED") from None
 
     @staticmethod
     def _names(instance: str, key: str):

@@ -84,6 +84,8 @@ class KeychainTests(unittest.TestCase):
             SecKeychainFindGenericPassword=Callable(find),
             SecKeychainAddGenericPassword=Callable(lambda *args: status),
             SecKeychainItemFreeContent=Callable(lambda *args: releases.append("content") or 0),
+            SecKeychainCopyDefault=Callable(lambda *args: -25307),
+            SecKeychainGetStatus=Callable(lambda *args: -50),
         )
         cf = SimpleNamespace(CFRelease=Callable(lambda *args: releases.append("reference")))
         return _NativeKeychain(security, cf), releases
@@ -108,6 +110,45 @@ class KeychainTests(unittest.TestCase):
         native, _ = self.native_store(-25299)
         with self.assertRaisesRegex(SecretStoreError, "^KEYCHAIN_VALUE_CONFLICT$"):
             native.add(b"service", b"account", b"synthetic")
+
+    def test_readiness_uses_only_store_status_and_releases_reference(self):
+        for copy_status, status_result, flags, expected in (
+                (0, 0, 7, None), (0, 0, 6, "KEYCHAIN_LOCKED"),
+                (0, 0, 3, "KEYCHAIN_PERMISSION_DENIED"),
+                (0, -128, 0, "KEYCHAIN_READINESS_FAILED"),
+                (-25307, 0, 0, "KEYCHAIN_UNAVAILABLE")):
+            with self.subTest(copy_status=copy_status, status=status_result, flags=flags):
+                native, releases = self.native_store()
+
+                def copy_default(output):
+                    ctypes.cast(output, ctypes.POINTER(ctypes.c_void_p))[0] = 88
+                    return copy_status
+
+                def get_status(keychain, output):
+                    self.assertEqual(keychain.value, 88)
+                    ctypes.cast(output, ctypes.POINTER(ctypes.c_uint32))[0] = flags
+                    return status_result
+
+                native.security.SecKeychainCopyDefault.implementation = copy_default
+                native.security.SecKeychainGetStatus.implementation = get_status
+                native.security.SecKeychainFindGenericPassword.implementation = lambda *args: self.fail("Item read")
+                native.security.SecKeychainAddGenericPassword.implementation = lambda *args: self.fail("Item write")
+                if expected:
+                    with self.assertRaisesRegex(SecretStoreError, "^" + expected + "$"):
+                        MacKeychain(native).check_ready()
+                else:
+                    MacKeychain(native).check_ready()
+                self.assertEqual(releases, ["reference"])
+
+    def test_readiness_requires_available_store_and_redacts_unexpected_errors(self):
+        native, releases = self.native_store()
+        native.security.SecKeychainCopyDefault.implementation = lambda *args: 0
+        with self.assertRaisesRegex(SecretStoreError, "^KEYCHAIN_UNAVAILABLE$"):
+            MacKeychain(native).check_ready()
+        self.assertEqual(releases, [])
+        backend = SimpleNamespace(check_ready=lambda: (_ for _ in ()).throw(RuntimeError("synthetic-private-detail")))
+        with self.assertRaisesRegex(SecretStoreError, "^KEYCHAIN_READINESS_FAILED$"):
+            MacKeychain(backend).check_ready()
 
     def test_names_and_values_are_validated(self):
         for instance in ("../sample", "UPPER", "", "x" * 41):
