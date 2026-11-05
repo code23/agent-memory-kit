@@ -1,0 +1,8 @@
+{
+  "backendSourceHead": "3c60957f68acf8ae023ee8647651d32fd3388023",
+  "backendRuntimeCode": "349ae2a4d",
+  "publicPrerequisite": "4c23016158819d5680f62369f63dd721a76b02f2",
+  "bundleSha256": "eebfe964bf9119a57e5840b6c1af5707e630c001c03f91f896d884e3fbf9982b",
+  "runtimeManifestSha256": "605bd99b393a066b8bec53efdfaaefa48a94eff1db2e1b204809338e84d307e5",
+  "verification": "Integrity/provenance only; adjacent checksums do not authenticate a publisher."
+}
