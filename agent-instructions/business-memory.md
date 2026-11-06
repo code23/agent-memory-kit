@@ -82,6 +82,15 @@ is unavailable, stop before minting a token and resolve the account/access setup
 First, from the operator's interactive terminal, run the nonsecret sink preflight
 over that exact SSH route. Replace every placeholder before running commands:
 
+The commands below assume the coding session uses the default native client
+configuration directories. If its approved launcher sets `CODEX_HOME` or
+`CLAUDE_CONFIG_DIR`, explicitly preserve those same absolute nonsecret selectors
+in the remote `connect-check`, `connect`/`reconnect` commands and the later local
+`run` environment. SSH does not automatically inherit the interactive launcher's
+environment. Do not change those selectors or global instructions to evade the
+compatibility checks. Quote each substituted path for the remote shell, especially
+paths containing spaces; the examples use space-free placeholders.
+
 ```sh
 ssh -T -oBatchMode=yes -oStrictHostKeyChecking=yes <coding-user>@127.0.0.1 \
   '/absolute/path/memory-kit connect-check --project /absolute/project --workspace example-business --url http://127.0.0.1:47892/mcp --instance example-agent-1 --expected-uid <coding-uid>'

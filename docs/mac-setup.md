@@ -55,9 +55,23 @@ node runtime/team-memory-verify.mjs
 
 `doctor` and `plan` are read-only. They check the account boundary, source/tool permissions, runtime versions, root and required listener availability. Resolve failures before installation. They never silently install dependencies or change an existing service.
 
+These commands check different parts of setup; a successful earlier check does not certify the later steps:
+
+| Command and account | Prerequisites checked | Still needs verification |
+| --- | --- | --- |
+| `doctor` / `plan`, operator | Separate standard coding account, protected source and executables, Node 24, PostgreSQL 18 `initdb`/`pg_ctl`/`psql`/`postgres`, installation root, service port and unlocked default Keychain | Coding project compatibility, SSH transfer, per-item Keychain access, backup/restore tools and live client behavior |
+| `connect-check`, coding account over the intended transfer route | Explicit expected UID, standard-account membership, project and managed configuration, no binding lock, and unlocked default Keychain | Credential creation/storage, service availability and actual client loading |
+| `connect` / `reconnect`, coding account | Project binding and secure-store write for the supplied token; reconnect keeps the existing workspace and URL | Server acceptance of the token and current server authorization |
+| `run`, coding account | Intact binding, supported instruction context and readable agent credential | MCP availability, token validity, native client trust/configuration and successful recall/submission |
+| `status`, operator | LaunchAgent loaded state, PostgreSQL running/stopped/unknown state and start-at-login configuration | MCP health, credentials and business operations |
+
+The operator's Keychain must already be unlocked and readable/writable for `doctor`, `plan` and `install`. Preflight does not unlock it or prove an individual credential item's access permissions. PostgreSQL backup and restore tools are listed above for the remaining recovery acceptance; `doctor` does not validate `pg_dump` or `pg_restore`.
+
 `install` creates a dedicated PostgreSQL cluster, role credentials, the business workspace and a verified private software copy. Credentials are generated in memory and stored in Keychain; no manual SQL or password argument is required. Installation does not start the background service.
 
 The default root is `~/Library/Application Support/Agent Memory Kit/demo-business`. It holds private configuration, database storage and versioned software outside the checkout. Do not share it with the coding account or publish it. If you choose a different `--root`, use that same root for all subsequent commands.
+
+macOS limits Unix socket paths. Setup requires the encoded path `<root>/s/.s.PGSQL.47893` to use fewer than 104 bytes, leaving room for its terminating NUL. A long account home or workspace can make the default root too long. Choose a shorter owner-private absolute root outside the checkout, then repeat `doctor`, `plan` and `install` with that same `--root`; do not move an existing database or loosen directory permissions.
 
 An identical reinstall preserves the instance, credentials and database. Changed software refuses in-place replacement until the protected upgrade procedure is supported. Incomplete database initialization needs operator recovery; do not delete database files to bypass an error.
 
@@ -96,6 +110,8 @@ The destination command has this shape; its stdin must be the secure token strea
 ```
 
 Run it from the coding account with its own trusted checkout. It writes `.agent-memory.json`, managed project instructions and MCP entries in `.mcp.json` and `.codex/config.toml`. Configuration contains a Keychain reference and `${AGENT_MEMORY_TOKEN}`, never the token. Unrelated configuration is preserved; ambiguous or conflicting bindings are refused.
+
+Use the same coding-client configuration context for the SSH preflight, token transfer, reconnection and later `run`. In particular, existing `CODEX_HOME` and `CLAUDE_CONFIG_DIR` selectors must name the same absolute directories in each context. An interactive launcher may set values that an SSH command does not inherit. Keep those existing settings intact and verify the intended context before minting a token; do not select an empty configuration directory just to bypass a refusal.
 
 This unaccepted candidate currently requires a clean coding instruction context. Global Claude/Codex instruction files and alternate project instruction/rule paths are unsupported, as are existing `logthis`, `log this`, `log-this` or `log_this` capture routes. No reviewed-handoff override is implemented. Preserve those files and use a separate clean context for testing; do not delete an existing setup to make preflight pass. The [binding contract](../agent-instructions/business-memory.md) names the supported paths and recovery limits. This compatibility restriction is a release gate.
 
