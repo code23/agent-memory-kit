@@ -170,3 +170,15 @@ alternate project rule was added, keep that file and all binding files intact.
 This candidate cannot approve or adopt that context. Use a separately authorized
 clean coding profile/project context, or leave this integration stopped pending
 a compatibility implementation; do not delete global instructions to make it run.
+
+## Search and verify
+
+The baseline memory service uses full-text search. Use concise terms from the
+question; when a search misses, try reasonable synonyms through the existing
+search/context tools. Inspect the current published item before relying on it and
+retain its knowledge/revision reference. The coding agent supplies this reasoning;
+storage and text retrieval require no additional inference account.
+
+A result sharing a few words may still be irrelevant. If the published facts do
+not answer the question, say the answer is unknown rather than infer a policy or
+document location. Leave managed binding blocks intact while using these tools.

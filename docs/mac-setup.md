@@ -101,6 +101,8 @@ This unaccepted candidate currently requires a clean coding instruction context.
 
 Business instructions reuse the existing `log this` intent. They do not install a competing capture command or a second memory store. Native model and authentication settings remain in place; this is not certification of every existing instruction setup.
 
+Follow the existing tools' [search and verification guidance](../agent-instructions/business-memory.md#search-and-verify) for paraphrased questions and missing knowledge.
+
 ### Launch a coding session
 
 From the coding account, launch the installed client through the profile:
