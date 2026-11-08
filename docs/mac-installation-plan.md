@@ -94,3 +94,93 @@ verification but before the mocked child boundary. The next check refuses that
 context, but no immutable launch-custody guarantee follows. These are blocking
 limitations, not successful compatibility or server-authorization tests. Runtime
 behavior and the existing refusal remain unchanged.
+
+### Operator-controlled authority: decision before implementation
+
+A protected operator registry is a new candidate, not an implemented exception
+to the refusal above. Independent contract challenge found the mechanism viable
+at the protected launcher's authorisation points, but blocked the stronger
+requirement to deny every concurrent context edit before child creation. Checks
+cannot freeze coding-owned files between their final read and the native client's
+later reads. A cooperative registry lock does not close that interval.
+
+The registry would be a safety interlock on one protected launcher. It would not
+confine an unsandboxed coding account, certify independently launched clients or
+turn prompts into an authorisation boundary. Server membership, restricted
+read/submit tokens, token revocation and protected publication review remain the
+actual memory authority. Revoking context approval cannot revoke a token already
+held by a running process.
+
+| Candidate | What it could establish | Missing decision or access |
+| --- | --- | --- |
+| Approval at the protected launcher's decision points | Exact reviewed inventory matches the bytes observed during each current approval lookup; admit/revoke replaces blanket refusal | Explicit acceptance of later edits and native loading as unaccepted; required contract below must be implemented and tested |
+| Immutable client adapter | Supported client consumes only a supplied immutable context | Vendor-documented loading/discovery controls and a named authorised native fixture; substituting an empty configuration directory remains forbidden |
+| Operator custody or host sandbox | Coding processes cannot alter the context being consumed | Separate host/security authority and an agreed change to the coding workflow |
+
+No implementation acceptance is frozen until that decision is resolved. The
+first option needs all the following; it is not a profile flag or filename
+exemption:
+
+- **Fixed custody and discovery.** A root-owned discovery directory under
+  `/Library/Application Support/Agent Memory Kit/Context Authority` delegates a
+  client-readable, operator-owned subtree for protected client software and the
+  current registry. Every ancestor must prevent replacement by the coding
+  account. Its real creation needs separately authorised host setup. The private
+  service root stays private. Profile fields and inherited environment cannot
+  choose or omit this authority. Lifecycle commands refuse an unprotected copy
+  of the software. Descriptor-anchored registry reads check the operator owner,
+  file type, inode, ACL and ownership-enforcing volume; the existing stricter
+  project-file/private-root checks must not be relaxed to read public metadata.
+- **Complete observed context.** Protected software builds an inventory from a
+  versioned loading contract for each supported client. The operator cannot
+  omit sources by selecting a list. It records absent paths and complete
+  supported instruction, import, skill, command, prompt, agent, plugin and
+  settings trees. Unknown loading mechanisms refuse. A familiar filename is
+  not evidence that competing capture instructions are absent. Only explicitly
+  authorised bodies may be read or displayed; current development fixtures use
+  fictional sources exclusively. Credentials are excluded, not copied or hashed
+  into a context packet. Unclassifiable inputs stop intake.
+- **Exact review and launch identity.** Extend the existing read-only preflight
+  and operator command structure to stream a canonical context inventory over
+  the established transport. The operator re-hashes the displayed authorised
+  bytes and confirms their digest through the protected terminal, without an
+  approval flag or new capture store. Bind coding UID, canonical project path
+  and device/inode, workspace/service, native selectors, context-affecting
+  environment and arguments, resolved client executable/package identity,
+  protected software digest, loading-contract version and complete inventory.
+  Preserve ordinary model/routing arguments; refuse unreviewed context-affecting
+  values, unknown clients and binary/version drift. Binary hashes are observed
+  identity, not custody of a coding-owned executable.
+- **Current lookup and effects.** Give each approval a current generation in the
+  protected registry. Missing, malformed, stripped, changed, revoked or old
+  authority refuses at `connect-check`, initial and already-bound `connect`,
+  `reconnect` and `run`, before credential, project-write or child effects at
+  that decision point. Rotation and interrupted recovery do not mint approval.
+  Record all intended prospective managed bytes during review, so binding cannot
+  silently introduce unreviewed instructions. Recheck changes during an operation;
+  report post-session drift separately, without claiming it was prevented.
+- **Revocation and races.** Revoke publishes a new revoked generation atomically
+  without waiting indefinitely on a coding-readable lock. Launch takes a shared
+  lock only through the bounded authorisation/spawn interval, never while waiting
+  for the session. Operator synchronisation attempts are bounded and report any
+  unconfirmed in-flight launch. Tests must cover parent and symlink replacement,
+  malformed inputs, stale generations, concurrent editing, atomic replacement,
+  maliciously held locks and parallel revocation. A final read still does not
+  freeze files or establish immutable native consumption.
+- **Existing capture dispatch.** Preserve personal or unscoped capture on its
+  previous route. Only explicitly selected business capture proposes pending
+  facts through the same entry point; it never approves or publishes. Review
+  the exact generated block with the rest of the context. Deterministic tests
+  assert observable effects and structured contracts. A versioned, opt-in LLM
+  meaning rubric and an actual supported native fixture remain separate gates;
+  keyword matching cannot certify intent or personal-route coexistence.
+
+Synthetic acceptance would exercise operator review, preflight, connect, a real
+controlled child, rotation/reconnect and revoke or changed-context denial,
+preserving fixture bytes, personal/default dispatch and model choices. It must
+exercise each failure path above before credential/write/child effects, while
+labelling mocks of UID/custody checks as mocks. Passing this would not establish
+a real two-account boundary, unlocked-Keychain transfer or native loading.
+Those require named authorised fixtures and remain unrun. No host bootstrap,
+client installation, mutable-profile bypass or runtime implementation is part
+of the evidence for this design decision.
