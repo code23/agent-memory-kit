@@ -7,8 +7,10 @@ This remains an unaccepted compatibility candidate. It requires a coding profile
 with no global instruction files or Claude rules, and a project without alternate
 instruction overrides/rules or competing capture commands. Existing contexts
 with those paths are unsupported. There is no recorded-review or reviewed-handoff
-implementation that permits them. Keep all existing files intact; use a separately
-authorized clean coding profile/project context or report the compatibility gap.
+implementation that permits them. Keep all existing files and selectors intact;
+leave an incompatible integration stopped. Do not use an empty configuration
+directory as a bypass. The [compatibility gate packet](../docs/mac-installation-plan.md#existing-instruction-and-capture-compatibility)
+records the missing protected-authority and capture-dispatch contract.
 The existing three-model launchers and their routing source are untouched.
 
 The installer appends a managed block to the selected project's `AGENTS.md` and
@@ -25,7 +27,7 @@ never approves or publishes proposals, captures private/personal material or
 secrets, or falls back to a private memory store.
 
 An existing global/private or project `logthis` workflow is unsupported by this
-candidate. Keep its files intact and use a separately authorized clean coding
+candidate. Keep its files intact and leave this integration stopped in that
 context. The installer checks path existence without reading private skill
 contents and refuses ambiguous bindings; it implements no reviewed handoff for
 those contexts. Native YOLO launchers and their three-model routing are unchanged.
@@ -176,9 +178,10 @@ the project diff is understood and the partial state is resolved.
 
 If an otherwise intact binding stops because a global instruction file or an
 alternate project rule was added, keep that file and all binding files intact.
-This candidate cannot approve or adopt that context. Use a separately authorized
-clean coding profile/project context, or leave this integration stopped pending
-a compatibility implementation; do not delete global instructions to make it run.
+This candidate cannot approve or adopt that context. Leave this integration
+stopped pending the reviewed compatibility contract; do not delete or move
+global instructions or change selectors to make it run. Operator uninstall is
+not project unbinding, and no client unbind or context-approval command exists.
 
 ## Search and verify
 

@@ -113,7 +113,11 @@ Run it from the coding account with its own trusted checkout. It writes `.agent-
 
 Use the same coding-client configuration context for the SSH preflight, token transfer, reconnection and later `run`. In particular, existing `CODEX_HOME` and `CLAUDE_CONFIG_DIR` selectors must name the same absolute directories in each context. An interactive launcher may set values that an SSH command does not inherit. Keep those existing settings intact and verify the intended context before minting a token; do not select an empty configuration directory just to bypass a refusal.
 
-This unaccepted candidate currently requires a clean coding instruction context. Global Claude/Codex instruction files and alternate project instruction/rule paths are unsupported, as are existing `logthis`, `log this`, `log-this` or `log_this` capture routes. No reviewed-handoff override is implemented. Preserve those files and use a separate clean context for testing; do not delete an existing setup to make preflight pass. The [binding contract](../agent-instructions/business-memory.md) names the supported paths and recovery limits. This compatibility restriction is a release gate.
+This unaccepted candidate currently requires a clean coding instruction context. Global Claude/Codex instruction files and alternate project instruction/rule paths are unsupported, as are existing `logthis`, `log this`, `log-this` or `log_this` capture routes. No reviewed-handoff override is implemented. Preserve those files and keep an incompatible integration stopped; do not delete or move an existing setup or select empty native configuration directories to make preflight pass. Only isolated fictional clean contexts have been tested. The [compatibility gate packet](mac-installation-plan.md#existing-instruction-and-capture-compatibility) identifies the missing authority and acceptance contract; the [binding contract](../agent-instructions/business-memory.md) names the current paths and recovery limits.
+
+The current refusal messages may still say “use a separate clean coding
+profile/context.” That means an already separately authorized context, not
+permission to create an empty profile or change selectors to bypass this gate.
 
 Business instructions reuse the existing `log this` intent. They do not install a competing capture command or a second memory store. Native model and authentication settings remain in place; this is not certification of every existing instruction setup.
 

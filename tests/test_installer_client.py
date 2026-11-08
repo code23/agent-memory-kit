@@ -1,8 +1,10 @@
 """Offline business-client contract tests; no real Keychain or native client calls."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
@@ -722,6 +724,161 @@ class ClientTests(unittest.TestCase):
             client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
                                     self.keychain, "fixture", os.getuid() + 1)
         self.assertEqual(self.keychain.readiness_checks, 1)
+
+    def test_clean_lifecycle_preserves_native_models_routing_and_unrelated_settings(self):
+        codex = self.home / ".codex/config.toml"
+        claude = self.home / ".claude/settings.json"
+        routing = self.home / "native-routing.json"
+        codex.parent.mkdir()
+        claude.parent.mkdir()
+        codex.write_text('model = "fixture-lead"\napproval_policy = "never"\n')
+        claude.write_text(json.dumps({"model": "fixture-review", "permissions": {"defaultMode": "bypassPermissions"}}))
+        routing.write_text(json.dumps({"lead": "fixture-lead", "worker": "fixture-worker", "review": "fixture-review"}))
+        globals_before = {path: path.read_bytes() for path in (codex, claude, routing)}
+        (self.project / ".codex").mkdir()
+        local_codex = 'model = "fixture-worker"\n\n[mcp_servers.other]\nurl = "http://127.0.0.1:77/mcp"\n'
+        (self.project / ".codex/config.toml").write_text(local_codex)
+        other_server = {"type": "http", "url": "http://127.0.0.1:77/mcp"}
+        (self.project / ".mcp.json").write_text(json.dumps({"mcpServers": {"other": other_server}, "unrelated": True}))
+        (self.project / "AGENTS.md").write_text("Keep existing project guidance.\n")
+        untouched = self.project / "unrelated-project.json"
+        untouched.write_text('{"fixture_setting":"keep"}\n')
+        untouched_before = untouched.read_bytes()
+        before = self.tree()
+        client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                self.keychain, "fixture", os.getuid())
+        self.assertEqual(self.tree(), before)
+        self.connect()
+        child = (
+            'import hashlib,json,os,pathlib,sys,tomllib; '
+            'assert hashlib.sha256(os.environ["AGENT_MEMORY_TOKEN"].encode()).hexdigest() == sys.argv[2]; '
+            'assert tomllib.loads((pathlib.Path(os.environ["CODEX_HOME"])/"config.toml").read_text())["model"] == "fixture-lead"; '
+            'assert json.loads((pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"])/"settings.json").read_text())["model"] == "fixture-review"; '
+            'assert json.loads(pathlib.Path(sys.argv[1]).read_text()) == {"lead":"fixture-lead","worker":"fixture-worker","review":"fixture-review"}; '
+            'assert sys.argv[3:] == ["--model","fixture-worker","--yolo"]; '
+            'assert json.loads((pathlib.Path.cwd()/".mcp.json").read_text())["mcpServers"]["business-memory"]["url"] == "http://127.0.0.1:4237/mcp"'
+        )
+        argv = [sys.executable, "-B", "-c", child, str(routing), hashlib.sha256(self.token).hexdigest(),
+                "--model", "fixture-worker", "--yolo"]
+        prior_token = os.environ.get(client.TOKEN_ENV)
+        self.assertEqual(client.run(self.project / client.PROFILE_NAME, argv, self.keychain), 0)
+        bound = self.tree()
+        client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                                self.keychain, "rotated-fixture", os.getuid(), rekey=True)
+        self.assertEqual(self.tree(), bound)
+        rotated_token = b"offline-rotated-fixture"
+        client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                         rotated_token, self.keychain, "rotated-fixture")
+        argv[5] = hashlib.sha256(rotated_token).hexdigest()
+        self.assertEqual(client.run(self.project / client.PROFILE_NAME, argv, self.keychain), 0)
+        self.assertEqual(os.environ.get(client.TOKEN_ENV), prior_token)
+        self.assertEqual({path: path.read_bytes() for path in globals_before}, globals_before)
+        self.assertEqual(untouched.read_bytes(), untouched_before)
+        self.assertTrue((self.project / ".codex/config.toml").read_text().startswith(local_codex))
+        mcp = json.loads((self.project / ".mcp.json").read_text())
+        self.assertEqual(mcp["mcpServers"]["other"], other_server)
+        self.assertTrue(mcp["unrelated"])
+        self.assertEqual({name: value for name, value in self.tree().items() if name != client.PROFILE_NAME},
+                         {name: value for name, value in bound.items() if name != client.PROFILE_NAME})
+
+    def test_existing_global_context_refuses_entire_bound_lifecycle_before_side_effects(self):
+        self.connect()
+        instruction = self.home / ".codex/AGENTS.md"
+        capture = self.home / ".agents/skills/logthis/SKILL.md"
+        for bodies in ((instruction,), (capture,), (instruction, capture)):
+            for path in bodies:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("Fictional private context: preserve without reading.\n")
+            before = {str(path.relative_to(self.base)): path.read_bytes()
+                      for path in self.base.rglob("*") if path.is_file()}
+            modes = {path: stat.S_IMODE(path.stat().st_mode) for path in bodies}
+            real_snapshot = client._snapshot
+            def scoped_snapshot(path):
+                self.assertNotIn(path, bodies)
+                return real_snapshot(path)
+            operations = {
+                "connect-check": lambda: client.check_connection(
+                    self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                    self.keychain, "rotated-fixture", os.getuid(), rekey=True),
+                "connect": self.connect,
+                "reconnect": lambda: client.reconnect(
+                    self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                    b"offline-rotated-fixture", self.keychain, "rotated-fixture"),
+                "run": lambda: client.run(self.project / client.PROFILE_NAME, ["fixture-native"], self.keychain),
+            }
+            for operation, invoke in operations.items():
+                try:
+                    for path in bodies:
+                        path.chmod(0)
+                    with self.subTest(context=[str(path.relative_to(self.home)) for path in bodies], operation=operation), \
+                         patch.object(client, "_snapshot", side_effect=scoped_snapshot), \
+                         patch.object(self.keychain, "get") as get, \
+                         patch.object(self.keychain, "put") as put, \
+                         patch.object(self.keychain, "check_ready") as ready, \
+                         patch.object(subprocess, "run") as launch:
+                        with self.assertRaisesRegex(client.ClientError, "does not support"):
+                            invoke()
+                        get.assert_not_called()
+                        put.assert_not_called()
+                        ready.assert_not_called()
+                        launch.assert_not_called()
+                finally:
+                    for path, mode in modes.items():
+                        path.chmod(mode)
+                self.assertEqual({path: stat.S_IMODE(path.stat().st_mode) for path in bodies}, modes)
+                self.assertEqual(before, {str(path.relative_to(self.base)): path.read_bytes()
+                                          for path in self.base.rglob("*") if path.is_file()})
+            for path in bodies:
+                path.unlink()
+            if capture in bodies:
+                capture.parent.rmdir()
+
+    def test_existing_global_context_refuses_initial_preflight_and_connect_without_body_reads(self):
+        instruction = self.home / ".claude/CLAUDE.md"
+        capture = self.home / ".agents/skills/logthis/SKILL.md"
+        for bodies in ((instruction,), (capture,), (instruction, capture)):
+            for path in bodies:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("Fictional private instructions and personal capture.\n")
+            before = {str(path.relative_to(self.base)): path.read_bytes()
+                      for path in self.base.rglob("*") if path.is_file()}
+            modes = {path: stat.S_IMODE(path.stat().st_mode) for path in bodies}
+            real_snapshot = client._snapshot
+            def scoped_snapshot(path):
+                self.assertNotIn(path, bodies)
+                return real_snapshot(path)
+            operations = {
+                "connect-check": lambda: client.check_connection(
+                    self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
+                    self.keychain, "fixture", os.getuid()),
+                "connect": self.connect,
+            }
+            for operation, invoke in operations.items():
+                try:
+                    for path in bodies:
+                        path.chmod(0)
+                    with self.subTest(context=[str(path.relative_to(self.home)) for path in bodies], operation=operation), \
+                         patch.object(client, "_snapshot", side_effect=scoped_snapshot), \
+                         patch.object(self.keychain, "get") as get, \
+                         patch.object(self.keychain, "put") as put, \
+                         patch.object(self.keychain, "check_ready") as ready, \
+                         patch.object(subprocess, "run") as launch:
+                        with self.assertRaisesRegex(client.ClientError, "does not support"):
+                            invoke()
+                        get.assert_not_called()
+                        put.assert_not_called()
+                        ready.assert_not_called()
+                        launch.assert_not_called()
+                finally:
+                    for path, mode in modes.items():
+                        path.chmod(mode)
+                self.assertEqual({path: stat.S_IMODE(path.stat().st_mode) for path in bodies}, modes)
+                self.assertEqual(before, {str(path.relative_to(self.base)): path.read_bytes()
+                                          for path in self.base.rglob("*") if path.is_file()})
+            for path in bodies:
+                path.unlink()
+            if capture in bodies:
+                capture.parent.rmdir()
 
     def test_connection_sink_preflight_rejects_collisions_before_keychain_readiness(self):
         (self.project / "CLAUDE.md").write_text("Use a private logthis workflow.\n")
