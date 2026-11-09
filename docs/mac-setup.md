@@ -90,6 +90,32 @@ After a Python package update, inspect `autostart_python_missing` in `status` an
 
 ## Bind the coding project
 
+The launch-context approval decision is complete. The current candidate supports
+only the conservative `claude-code/2.1.318` local observer described in the
+[installation plan](mac-installation-plan.md#local-observer-candidate-and-limits).
+Host bootstrap of the fixed root-owned Context Authority and delegated protected
+software is a separate, unrun gate. Existing service installation does not create
+that authority. Never expose the private service root or change native settings
+to satisfy the observer.
+
+Once that separately authorised host setup exists, use `connect-check
+--review-context --native-argv '<JSON argv>'` over the existing operator transport.
+It emits canonical current and prospective bytes for `operator --root
+<SERVICE_ROOT> -- context approve` on stdin; approval re-hashes the display and
+requires typing the full digest at `/dev/tty`. No `--yes` exists. The `--root`
+argument retains the existing operator CLI shape; authority discovery always uses
+the fixed path, not that argument. `operator --root <SERVICE_ROOT> -- context
+revoke` requires no coding-side packet. Registry revocation does not stop a
+running client or revoke its server token.
+
+Pass exactly the same `--native-argv` JSON to preflight, connect and reconnect;
+`run` receives those same native arguments after `--`. For example, an already
+chosen model/permission command can be represented as
+`["claude","--model","existing-model","--dangerously-skip-permissions"]`.
+The following transfer examples are schematic until that reviewed argv and host
+setup are supplied. Unsupported clients/flags/settings refuse; they are never
+silently redirected to another model or configuration directory.
+
 The agent receives a `read_submit` token. It can read published facts and propose pending facts, but cannot publish or obtain database credentials. From the operator terminal, first create a fictional business member:
 
 ```sh
@@ -106,18 +132,20 @@ The destination command has this shape; its stdin must be the secure token strea
 ```sh
 ./memory-kit connect --project "$HOME/Projects/business" \
   --workspace demo-business --url http://127.0.0.1:47892/mcp \
-  --instance demo-business-agent
+  --instance demo-business-agent \
+  --native-argv '["claude"]'
 ```
 
-Run it from the coding account with its own trusted checkout. It writes `.agent-memory.json`, managed project instructions and MCP entries in `.mcp.json` and `.codex/config.toml`. Configuration contains a Keychain reference and `${AGENT_MEMORY_TOKEN}`, never the token. Unrelated configuration is preserved; ambiguous or conflicting bindings are refused.
+Run it from the coding account through the delegated protected software copy. It writes `.agent-memory.json`, managed project instructions and MCP entries in `.mcp.json` and `.codex/config.toml`. Configuration contains a Keychain reference and `${AGENT_MEMORY_TOKEN}`, never the token. Unrelated configuration is preserved; ambiguous or conflicting bindings are refused.
 
 Use the same coding-client configuration context for the SSH preflight, token transfer, reconnection and later `run`. In particular, existing `CODEX_HOME` and `CLAUDE_CONFIG_DIR` selectors must name the same absolute directories in each context. An interactive launcher may set values that an SSH command does not inherit. Keep those existing settings intact and verify the intended context before minting a token; do not select an empty configuration directory just to bypass a refusal.
 
-This unaccepted candidate currently requires a clean coding instruction context. Global Claude/Codex instruction files and alternate project instruction/rule paths are unsupported, as are existing `logthis`, `log this`, `log-this` or `log_this` capture routes. No reviewed-handoff override is implemented. Preserve those files and keep an incompatible integration stopped; do not delete or move an existing setup or select empty native configuration directories to make preflight pass. Only isolated fictional clean contexts have been tested. The [compatibility gate packet](mac-installation-plan.md#existing-instruction-and-capture-compatibility) identifies the missing authority and acceptance contract; the [binding contract](../agent-instructions/business-memory.md) names the current paths and recovery limits.
-
-The current refusal messages may still say “use a separate clean coding
-profile/context.” That means an already separately authorized context, not
-permission to create an empty profile or change selectors to bypass this gate.
+The supported local subset can review existing global instruction and personal
+`logthis` sources. It inventories complete supported trees and absences. Imports,
+plugins, hooks/frontmatter, active managed preferences/policy, linked worktrees,
+unknown settings and unknown context selectors refuse conservatively. Auto-memory
+must already be disabled in observed settings. Keep incompatible sources intact;
+do not select an empty native home or edit settings to manufacture approval.
 
 Business instructions reuse the existing `log this` intent. They do not install a competing capture command or a second memory store. Native model and authentication settings remain in place; this is not certification of every existing instruction setup.
 
@@ -129,20 +157,18 @@ From the coding account, launch the installed client through the profile:
 
 ```sh
 ./memory-kit run --profile "$HOME/Projects/business/.agent-memory.json" -- claude
-# Or, when using Codex:
-./memory-kit run --profile "$HOME/Projects/business/.agent-memory.json" -- codex
 ```
 
-The wrapper validates the binding, retrieves only the agent token and passes it to that child. It does not change model routing. Restart the client after configuration changes. Claude Code and Codex configuration support does not certify cmux, T3, Grokbot or OpenBot; the chosen launch path needs live acceptance.
+The wrapper validates the binding, retrieves only the agent token and passes it to that child. It does not change model routing. Restart the client after configuration changes. Only the reviewed exact Claude release/subset can launch; other clients and wrappers remain unsupported. The chosen path still needs native acceptance.
 
-Unrelated edits to project instructions or other server settings should remain usable. Changes to managed memory configuration fail closed. Rotation requires revoking the old server token and explicitly reconnecting to a fresh Keychain instance. Do not overwrite secure-store entries or change workspace implicitly.
+Any inventoried local edit requires a fresh operator review; managed-region consistency alone is insufficient. Changes to managed memory configuration fail closed. Rotation requires revoking the old server token and explicitly reconnecting to a fresh Keychain instance. Do not overwrite secure-store entries or change workspace implicitly.
 
 ## Confirm the first fictional fact
 
 Use the [installed-client acceptance charter](installer-testing.md).
 
 1. Ask a business question in the coding session and verify the empty state.
-2. Use the existing `log this` entry point to propose a sourced fictional fact. It must report “submitted for review” and remain absent from reads.
+2. Explicitly select business capture through the existing `log this` entry point to propose a sourced fictional fact. It must report “submitted for review” and remain absent from reads.
 3. From the operator terminal, list proposals and review the returned proposal ID:
 
    ```sh

@@ -11,11 +11,11 @@ import subprocess
 import shutil
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from memory_kit import host
 from memory_kit import __main__ as cli
-from memory_kit import client
+from memory_kit import client, context_authority
 
 REAL_PRIVATE_ROOT = host.security.assert_private_root
 REAL_NOT_WRITABLE = host.security.assert_not_agent_writable
@@ -244,6 +244,7 @@ class HostTests(unittest.TestCase):
         self.assertTrue(path.exists())
 
     def test_cli_connect_check_is_nonsecret_json_and_never_reads_stdin(self):
+        native_argv = ["claude", "--model", "fixture-model", "--dangerously-skip-permissions"]
         output = io.StringIO()
         expected = {"ready": True, "keychain_unlocked": True, "item_acl_verified": False}
         stdin = types.SimpleNamespace(buffer=types.SimpleNamespace(read=lambda *_: self.fail("read-only check consumed stdin")),
@@ -253,26 +254,66 @@ class HostTests(unittest.TestCase):
                 patch.object(cli.sys, "stdin", stdin), contextlib.redirect_stdout(output):
             result = cli.main(["connect-check", "--project", str(self.base), "--workspace", "demo-team",
                                "--url", "http://127.0.0.1:47892", "--instance", "demo-instance",
-                               "--expected-uid", str(self.uid), "--rekey"])
+                               "--expected-uid", str(self.uid), "--rekey",
+                               "--native-argv", json.dumps(native_argv)])
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(output.getvalue()), expected)
         check.assert_called_once_with(self.base, "demo-team", "http://127.0.0.1:47892", self.store,
-                                      "demo-instance", self.uid, rekey=True)
+                                      "demo-instance", self.uid, rekey=True,
+                                      native_argv=native_argv, review_context=False)
         self.assertEqual(len(output.getvalue().splitlines()), 1)
 
     def test_cli_reconnect_consumes_token_only_from_stdin(self):
+        native_argv = ["claude", "--model", "fixture-model", "--dangerously-skip-permissions"]
         output = io.StringIO()
         token = b"kmt_" + b"a" * 43
         stdin = types.SimpleNamespace(buffer=io.BytesIO(token + b"\n"), isatty=lambda: False)
         with patch.object(client, "reconnect", return_value={}) as reconnect, \
+                patch.object(client, "_project", return_value=self.base), \
+                patch.object(context_authority, "decision", return_value=contextlib.nullcontext()) as approval, \
                 patch("memory_kit.keychain.MacKeychain", return_value=self.store), \
                 patch.object(cli.sys, "stdin", stdin), contextlib.redirect_stdout(output):
             result = cli.main(["reconnect", "--project", str(self.base), "--workspace", "demo-team",
-                               "--url", "http://127.0.0.1:47892", "--instance", "new-instance"])
+                               "--url", "http://127.0.0.1:47892", "--instance", "new-instance",
+                               "--native-argv", json.dumps(native_argv)])
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(output.getvalue()), {"connected": True})
-        reconnect.assert_called_once_with(self.base, "demo-team", "http://127.0.0.1:47892", token, self.store, "new-instance")
+        approval.assert_called_once_with(self.base, "demo-team", "http://127.0.0.1:47892",
+                                         "new-instance", native_argv)
+        reconnect.assert_called_once_with(self.base, "demo-team", "http://127.0.0.1:47892",
+                                          token, self.store, "new-instance", native_argv=native_argv)
+        self.assertEqual(stdin.buffer.read(), b"")
         self.assertNotIn(token.decode(), output.getvalue())
+
+    def test_cli_context_denial_precedes_credential_input_and_all_effects(self):
+        native_argv = ["claude", "--model", "fixture-model", "--dangerously-skip-permissions"]
+        stdin = types.SimpleNamespace(buffer=Mock(), isatty=lambda: False)
+        stdin.buffer.read.side_effect = AssertionError("denied context consumed credential stdin")
+        before = {str(path): path.read_bytes() for path in self.base.rglob("*") if path.is_file()}
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(client, "_project", return_value=self.base), \
+                patch.object(context_authority, "decision", side_effect=client.ClientError("context denied")) as approval, \
+                patch("memory_kit.keychain.MacKeychain") as keychain, \
+                patch.object(client, "reconnect") as reconnect, \
+                patch.object(client, "_replace") as write, \
+                patch.object(subprocess, "Popen") as spawn, \
+                patch.object(cli.sys, "stdin", stdin), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            result = cli.main(["reconnect", "--project", str(self.base), "--workspace", "demo-team",
+                               "--url", "http://127.0.0.1:47892", "--instance", "new-instance",
+                               "--native-argv", json.dumps(native_argv)])
+        self.assertEqual(result, 1)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(errors.getvalue().strip(), "context denied")
+        approval.assert_called_once_with(self.base, "demo-team", "http://127.0.0.1:47892",
+                                         "new-instance", native_argv)
+        stdin.buffer.read.assert_not_called()
+        keychain.assert_not_called()
+        reconnect.assert_not_called()
+        write.assert_not_called()
+        spawn.assert_not_called()
+        self.assertEqual(self.store.writes, [])
+        self.assertEqual(before, {str(path): path.read_bytes() for path in self.base.rglob("*") if path.is_file()})
 
     def test_invalid_runtime_workspace_refuses_before_any_io(self):
         for value in ("a", "my_team", "a" * 32):

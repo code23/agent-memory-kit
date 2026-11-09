@@ -9,10 +9,87 @@ import pwd
 import re
 import stat
 import sys
+from contextlib import contextmanager
 
 
 class SecurityError(RuntimeError):
     """Fixed diagnostic codes, without local names or filesystem paths."""
+
+
+@contextmanager
+def public_directory(path, owner_uid, identity):
+    """Anchor readable operator metadata; never relax private/project checks."""
+    path = _absolute(Path(path))
+    descriptors, snapshots = [], []
+    try:
+        fd = os.open("/", _open_flags())
+        descriptors.append(fd)
+        current = Path("/")
+        for part in (None,) + path.parts[1:]:
+            if part is not None:
+                current /= part
+                fd = os.open(part, _open_flags(), dir_fd=fd)
+                descriptors.append(fd)
+            info = os.fstat(fd)
+            _check_volume(fd)
+            _check_acl(fd)
+            if (info.st_uid not in (0, owner_uid) or info.st_uid == identity["uid"]
+                    or info.st_mode & 0o022):
+                raise SecurityError("UNPROTECTED_CONTEXT_ANCESTOR")
+            snapshots.append((current, info.st_dev, info.st_ino))
+        if os.fstat(fd).st_uid != owner_uid:
+            raise SecurityError("CONTEXT_OWNER_CHANGED")
+        def unchanged():
+            for name, device, inode in snapshots:
+                info = os.lstat(name)
+                if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != (device, inode):
+                    raise SecurityError("CONTEXT_PARENT_REPLACED")
+        unchanged()
+    except OSError:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise SecurityError("CONTEXT_AUTHORITY_UNAVAILABLE") from None
+    except BaseException:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise
+    try:
+        yield fd
+        unchanged()
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)
+
+
+def public_file_at(directory, name, owner_uid, limit=4 * 1024 * 1024):
+    """Read a single no-follow regular inode owned by the delegated operator."""
+    if Path(name).name != name or name in (".", ".."):
+        raise SecurityError("CONTEXT_INVALID_NAME")
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    try:
+        info = os.fstat(fd)
+        _check_volume(fd)
+        _check_acl(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid
+                or info.st_nlink != 1 or info.st_mode & 0o022 or info.st_size > limit):
+            raise SecurityError("CONTEXT_METADATA_UNSAFE")
+        data = b""
+        while len(data) <= limit:
+            chunk = os.read(fd, min(65536, limit + 1 - len(data)))
+            if not chunk:
+                break
+            data += chunk
+        after = os.fstat(fd)
+        named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        if (len(data) > limit or len(data) != info.st_size
+                or (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_uid, info.st_mode)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_uid, after.st_mode)
+                or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)):
+            raise SecurityError("CONTEXT_METADATA_REPLACED")
+        return data, fd, info
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 class _DarwinStatFS64(ctypes.Structure):

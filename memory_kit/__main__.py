@@ -32,9 +32,11 @@ def parser():
         connect.add_argument("--workspace", required=True)
         connect.add_argument("--url", required=True)
         connect.add_argument("--instance", required=True)
+        connect.add_argument("--native-argv", type=json.loads)
         if name == "connect-check":
             connect.add_argument("--expected-uid", required=True, type=int)
             connect.add_argument("--rekey", action="store_true")
+            connect.add_argument("--review-context", action="store_true")
     run = commands.add_parser("run")
     run.add_argument("--profile", required=True, type=Path)
     run.add_argument("args", nargs=argparse.REMAINDER)
@@ -53,14 +55,25 @@ def main(argv=None):
             if args.command == "connect-check":
                 result = client.check_connection(args.project, args.workspace, args.url,
                                                  MacKeychain(), args.instance, args.expected_uid,
-                                                 rekey=args.rekey)
+                                                 rekey=args.rekey, native_argv=args.native_argv,
+                                                 review_context=args.review_context)
             elif args.command in ("connect", "reconnect"):
                 if sys.stdin.isatty():
                     raise host.HostError("Provide the agent credential through a secure input pipe")
+                # Current context authority is checked before accepting credential input.
+                from . import context_authority
+                project = client._project(args.project)
+                if args.native_argv is None:
+                    with context_authority._early_reads(project):
+                        client._check_logthis(project)
+                with context_authority.decision(project, args.workspace, args.url,
+                                                args.instance, args.native_argv):
+                    pass
                 token = sys.stdin.buffer.read(4097).strip()
                 if not token or len(token) > 4096:
                     raise host.HostError("Agent credential input is invalid")
-                getattr(client, args.command)(args.project, args.workspace, args.url, token, MacKeychain(), args.instance)
+                getattr(client, args.command)(args.project, args.workspace, args.url, token,
+                                              MacKeychain(), args.instance, native_argv=args.native_argv)
                 result = {"connected": True}
             else:
                 native_args = args.args[1:] if args.args[:1] == ["--"] else args.args
@@ -76,6 +89,17 @@ def main(argv=None):
                           "postgres_port": host.PG_PORT, "service_port": host.SERVICE_PORT,
                           "changes_made": False}
         else:
+            if args.command == "operator":
+                runtime_args = args.args[1:] if args.args[:1] == ["--"] else args.args
+                if runtime_args in (["context", "approve"], ["context", "revoke"]):
+                    from . import context_authority
+                    packet = b'{}' if runtime_args[-1]=='revoke' else sys.stdin.buffer.read(context_authority.MAX_PACKET + 1)
+                    if len(packet) > context_authority.MAX_PACKET:
+                        raise ClientError("Context review packet is too large.")
+                    result = context_authority.operator(None if runtime_args[-1]=='revoke' else context_authority.parse(packet),
+                                                        revoke=runtime_args[-1] == "revoke")
+                    print(json.dumps(result, sort_keys=True))
+                    return 0
             config = host.load(args.root, runtime=args.command not in ("stop", "status", "uninstall"))
             if args.command == "operator":
                 runtime_args = args.args[1:] if args.args[:1] == ["--"] else args.args

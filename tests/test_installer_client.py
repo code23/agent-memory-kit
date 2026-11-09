@@ -1,5 +1,6 @@
 """Offline business-client contract tests; no real Keychain or native client calls."""
 
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -11,7 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from memory_kit import client
+from memory_kit import client, context_authority
 
 
 class FakeKeychain:
@@ -46,6 +47,35 @@ class ClientTests(unittest.TestCase):
         self.native_home_patch = patch.dict(os.environ, {"CODEX_HOME": str(self.home / ".codex"),
                                                         "CLAUDE_CONFIG_DIR": str(self.home / ".claude")})
         self.native_home_patch.start()
+        # Legacy binding unit tests explicitly mock ONLY the new approval boundary.
+        # Its real protected-custody/native-contract behavior has focused tests.
+        # Retain baseline refusal/managed validation in this fixture admission.
+        @contextmanager
+        def approved_binding(project, workspace, url, instance, argv):
+            client._check_logthis(project)
+            if (project / client.PROFILE_NAME).exists():
+                client._verify(project, client._load_profile(project / client.PROFILE_NAME))
+            else:
+                client._prepare_binding(project, workspace, url, instance)
+            if argv is not None and (not isinstance(argv, list) or not argv
+                    or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in argv)):
+                raise client.ClientError("Supply a native coding-client command and arguments.")
+            yield {'identity': {'environment': context_authority._environment(),
+                                'executable': {'path': argv[0] if argv else ''}, 'argv': argv}}
+        # Same explicit legacy approval-boundary fixture: early metadata-only
+        # admission is tested with real roots in test_installer_context.py.
+        self.early_patch = patch.object(context_authority, "_early_reads", return_value=nullcontext())
+        self.early_patch.start()
+        self.addCleanup(self.early_patch.stop)
+        self.planner_patch = patch.object(context_authority, "_plan_sources", return_value=None)
+        self.planner_patch.start()
+        self.addCleanup(self.planner_patch.stop)
+        self.authority_patch = patch.object(context_authority, "decision", approved_binding)
+        self.authority_patch.start()
+        self.addCleanup(self.authority_patch.stop)
+        self.context_env_patch = patch.object(context_authority, "_environment", return_value={})
+        self.context_env_patch.start()
+        self.addCleanup(self.context_env_patch.stop)
         self.keychain = FakeKeychain()
         self.token = b"offline-fixture-agent-token"
 
@@ -302,7 +332,7 @@ class ClientTests(unittest.TestCase):
         path.mkdir(parents=True)
         (path / "default.rules").write_text("prefix_rule fixture")
         self.connect()
-        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+        with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 0, "poll": lambda self: 0})()):
             self.assertEqual(client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain), 0)
 
     def test_unsupported_instruction_paths_preserve_all_trees_without_body_reads(self):
@@ -429,7 +459,7 @@ class ClientTests(unittest.TestCase):
         for data in (None, b"not-json", b"{}", b'{"version":false}'):
             if data is not None:
                 path.write_bytes(data)
-            with self.assertRaises(client.ClientError), patch.object(subprocess, "run") as launch:
+            with self.assertRaises(client.ClientError), patch.object(subprocess, "Popen") as launch:
                 client.run(path, ["codex-yolo"], self.keychain)
             launch.assert_not_called()
         with self.assertRaises(client.ClientError):
@@ -439,10 +469,10 @@ class ClientTests(unittest.TestCase):
         self.connect()
         argv = ["claude-yolo", "--model", "unchanged-model", "a prompt"]
         prior = os.environ.get(client.TOKEN_ENV)
-        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(argv, 7)) as launch:
+        with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 7, "poll": lambda self: 7})()) as launch:
             self.assertEqual(client.run(self.project / client.PROFILE_NAME, argv, self.keychain), 7)
         args, kwargs = launch.call_args
-        self.assertIs(args[0], argv)
+        self.assertEqual(args[0], argv)  # Checked launch constructs a fresh equal argv list.
         self.assertEqual(kwargs["env"][client.TOKEN_ENV], self.token.decode())
         self.assertEqual(kwargs["cwd"], str(self.project))
         self.assertEqual(os.environ.get(client.TOKEN_ENV), prior)
@@ -460,7 +490,7 @@ class ClientTests(unittest.TestCase):
         with (self.project / ".codex/config.toml").open("a") as handle:
             handle.write('\n[mcp_servers.other]\nurl = "http://127.0.0.1:77/mcp"\n')
         before = self.tree()
-        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+        with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 0, "poll": lambda self: 0})()):
             self.assertEqual(client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain), 0)
         self.connect()
         self.assertEqual(self.tree(), before)
@@ -476,7 +506,7 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.keychain.get("rotated-fixture", "agent"), replacement)
         self.assertEqual({key: value for key, value in self.tree().items() if key != client.PROFILE_NAME},
                          {key: value for key, value in before.items() if key != client.PROFILE_NAME})
-        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch:
+        with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 0, "poll": lambda self: 0})()) as launch:
             client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
         self.assertEqual(launch.call_args.kwargs["env"][client.TOKEN_ENV], replacement.decode())
         self.assertNotIn(replacement, b"".join(self.tree().values()))
@@ -525,7 +555,7 @@ class ClientTests(unittest.TestCase):
                 client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
                                  b"replacement-fixture", self.keychain, "rotated-fixture")
         self.assertEqual(before, self.tree())
-        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as launch:
+        with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 0, "poll": lambda self: 0})()) as launch:
             client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
         self.assertEqual(launch.call_args.kwargs["env"][client.TOKEN_ENV], self.token.decode())
 
@@ -655,7 +685,7 @@ class ClientTests(unittest.TestCase):
         path = self.project / "CLAUDE.md"
         before = path.read_bytes()
         path.write_bytes(before.replace(b"never approve or publish", b"approve and publish"))
-        with patch.object(subprocess, "run") as launch:
+        with patch.object(subprocess, "Popen") as launch:
             with self.assertRaises(client.ClientError):
                 client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
             path.write_bytes(before)
@@ -670,7 +700,7 @@ class ClientTests(unittest.TestCase):
         profile = json.loads(path.read_text())
         profile["workspace"] = "another-business"
         path.write_text(json.dumps(profile))
-        with patch.object(subprocess, "run") as launch:
+        with patch.object(subprocess, "Popen") as launch:
             with self.assertRaises(client.ClientError):
                 client.run(path, ["codex-yolo"], self.keychain)
             launch.assert_not_called()
@@ -679,7 +709,7 @@ class ClientTests(unittest.TestCase):
         self.connect()
         path = self.home / ".codex/skills/logthis"
         path.mkdir(parents=True)
-        with patch.object(subprocess, "run") as launch:
+        with patch.object(subprocess, "Popen") as launch:
             with self.assertRaises(client.ClientError):
                 client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
             launch.assert_not_called()
@@ -688,7 +718,7 @@ class ClientTests(unittest.TestCase):
         self.connect()
         path = self.project / ".codex"
         path.chmod(0o770)
-        with patch.object(subprocess, "run") as launch:
+        with patch.object(subprocess, "Popen") as launch:
             with self.assertRaises(client.ClientError):
                 client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
             launch.assert_not_called()
@@ -815,7 +845,7 @@ class ClientTests(unittest.TestCase):
                          patch.object(self.keychain, "get") as get, \
                          patch.object(self.keychain, "put") as put, \
                          patch.object(self.keychain, "check_ready") as ready, \
-                         patch.object(subprocess, "run") as launch:
+                         patch.object(subprocess, "Popen") as launch:
                         with self.assertRaisesRegex(client.ClientError, "does not support"):
                             invoke()
                         get.assert_not_called()
@@ -862,7 +892,7 @@ class ClientTests(unittest.TestCase):
                          patch.object(self.keychain, "get") as get, \
                          patch.object(self.keychain, "put") as put, \
                          patch.object(self.keychain, "check_ready") as ready, \
-                         patch.object(subprocess, "run") as launch:
+                         patch.object(subprocess, "Popen") as launch:
                         with self.assertRaisesRegex(client.ClientError, "does not support"):
                             invoke()
                         get.assert_not_called()
