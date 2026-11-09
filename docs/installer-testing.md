@@ -81,8 +81,10 @@ The initial implementation has native component evidence, not a completed two-ac
 `claude-code/2.1.318` and `claude-code/2.1.319`, selected only when the resolved
 `versions/<version>` path and embedded VERSION marker agree. Unknown versions
 refuse. Packets and approval are bound to the actual contract, executable version
-and SHA-256; executable changes require fresh review. SHA-256 binds reviewed
-bytes, not vendor authenticity.
+and SHA-256. Operator packet validation checks recorded identity self-consistency
+without accessing the coding user's executable. A changed executable is refused
+at launch by the coding user's fresh observation and requires fresh review.
+SHA-256 binds reviewed bytes, not vendor authenticity.
 
 Qualification rests on changelog review and binary string comparison: triage,
 not proof of identical loading behaviour. The review observes specific discovery

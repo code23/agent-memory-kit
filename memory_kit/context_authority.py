@@ -126,7 +126,7 @@ def _native(argv):
         fail('Unsupported Claude Code native release layout; only versions/2.1.318 and versions/2.1.319 are supported.')
     from .client import _directory
     with _directory(path.parent) as fd:
-        opened = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+        opened = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
         try:
             before = os.fstat(opened)
             if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_mode & 0o022:
@@ -167,6 +167,8 @@ def _environment():
 
 
 def _arguments(argv):
+    if not isinstance(argv, list) or not argv or any(not isinstance(x,str) or not x or '\x00' in x for x in argv):
+        fail('Supply native Claude command arguments.')
     index=1
     while index<len(argv):
         value=argv[index]
@@ -610,10 +612,18 @@ def validate_packet(packet):
         fail('Invalid native context review packet.')
     if any(key not in {'HOME','CLAUDE_CONFIG_DIR','CODEX_HOME','PATH','ANTHROPIC_MODEL','ANTHROPIC_DEFAULT_MODEL','ANTHROPIC_DEFAULT_OPUS_MODEL','ANTHROPIC_DEFAULT_SONNET_MODEL','ANTHROPIC_DEFAULT_HAIKU_MODEL'} or not isinstance(value,str) for key,value in packet['identity']['environment'].items()):
         fail('Review packet contains unclassified environment or credentials.')
-    native = _native(packet['identity']['argv'])
-    if (packet['identity']['executable'] != native
+    # The operator validates recorded identity only; the coding user's decision()
+    # observes the current executable again before authorising launch.
+    native = packet['identity']['executable']
+    if (not isinstance(native,dict) or set(native)!={'path','version','sha256'}
+            or not isinstance(native['version'],str)
+            or 'claude-code/'+native['version'] not in SUPPORTED_CONTRACTS
+            or not isinstance(native['path'],str) or Path(native['path']).name!=native['version']
+            or Path(native['path']).parent.name!='versions'
+            or not isinstance(native['sha256'],str) or len(native['sha256'])!=64
+            or any(char not in '0123456789abcdef' for char in native['sha256'])
             or packet['contract'] != 'claude-code/'+native['version']):
-        fail('Native executable or observer contract changed; export and review a fresh packet.')
+        fail('Native executable review identity is inconsistent.')
     _arguments(packet['identity']['argv'])
     # Operator hashes exactly the escaped UTF-8 bytes it displays, including
     # prospective managed sources. No body survives into the public registry.

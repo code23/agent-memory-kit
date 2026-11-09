@@ -49,7 +49,8 @@ class LocalContextTests(unittest.TestCase):
         self.capture.write_text('Fictional existing personal logthis: default and personal retain the previous route.\n')
         self.ancestor=self.base/'ancestor';self.ancestor.mkdir()
         self.instruction=self.ancestor/'CLAUDE.md';self.instruction.write_text('Fictional governing instructions.\n')
-        self.binary=self.base/'claude'
+        self.binary=self.base/'fixture-versions/versions/2.1.318'
+        self.binary.parent.mkdir(parents=True)
         self.binary.write_text('#!'+sys.executable+'''\nimport os,sys,json,pathlib
 assert sys.argv[1:]==['--model','fixture-worker','--dangerously-skip-permissions']
 assert os.environ['ANTHROPIC_AUTH_TOKEN']=='fictional-native-auth'
@@ -75,7 +76,7 @@ sys.exit(13)
         self.enterContext(patch.object(c,'_scope_roots',return_value=(self.project,self.ancestor)))
         def native(argv):
             if not isinstance(argv,list) or not argv:raise client.ClientError('missing argv')
-            return {'path':str(self.binary),'version':self.native_version,'sha256':c.digest(self.binary.read_bytes())}
+            return {'path':str(self.binary.with_name(self.native_version)),'version':self.native_version,'sha256':c.digest(self.binary.read_bytes())}
         self.enterContext(patch.object(c,'_native',side_effect=native))
         @contextmanager
         def authority(coding_uid=None):
@@ -150,22 +151,56 @@ sys.exit(13)
         self.approve()
         self.assertTrue(self.preflight()['ready'])
 
-    def test_packet_contract_version_and_sha_must_match_current_executable(self):
+    def test_packet_executable_self_consistency_refusals(self):
         packet=self.packet()
-        for field,value in (('contract','claude-code/2.1.319'),
-                            ('version','2.1.319'),('sha256','0'*64)):
+        executable=packet['identity']['executable']
+        invalid=[None, [], {**executable,'extra':True}]
+        invalid += [{key:value for key,value in executable.items() if key!=missing}
+                    for missing in executable]
+        invalid += [{**executable,'version':value} for value in ('2.1.320',None,[])]
+        invalid += [{**executable,'path':value} for value in
+                    (str(self.binary.with_name('2.1.319')),str(self.base/'2.1.318'),None,[])]
+        invalid += [{**executable,'sha256':value} for value in
+                    ('a'*63,'a'*65,'A'*64,'g'*64,'a'*63+'\n',None,[])]
+        for value in invalid:
             forged=copy.deepcopy(packet)
-            if field=='contract':forged[field]=value
-            else:forged['identity']['executable'][field]=value
-            with self.subTest(field=field),self.assertRaises(client.ClientError):
+            forged['identity']['executable']=value
+            with self.subTest(executable=value),self.assertRaises(client.ClientError):
                 c.validate_packet(forged)
+        forged=copy.deepcopy(packet);forged['contract']='claude-code/2.1.319'
+        with self.assertRaises(client.ClientError):c.validate_packet(forged)
+
+    def test_operator_approval_needs_no_coder_executable_or_path(self):
+        packets=[]
+        for command in ('claude',str(self.binary)):
+            self.argv[0]=command
+            packets.append(copy.deepcopy(self.packet()))
+        self.binary.unlink()  # Coder's executable is unavailable to this operator fixture.
+        for packet in packets:
+            with self.subTest(command=packet['identity']['argv'][0]), \
+                    patch.dict(os.environ,{'PATH':str(self.base/'operator-only-path')}), \
+                    patch.object(c,'export',return_value=packet), \
+                    patch.object(c,'_native',side_effect=PermissionError('coder executable inaccessible')) as native:
+                self.approve()
+                native.assert_not_called()
+                approved=json.loads((self.registry_root/'registry.json').read_text())['approval']['packet']
+                self.assertEqual(approved,c.hashes(packet))
+
+    def test_launch_refuses_approved_contract_drift(self):
         self.approve()
         registry=json.loads((self.registry_root/'registry.json').read_text())
         registry['approval']['packet']['contract']='claude-code/2.1.319'
         (self.registry_root/'registry.json').write_bytes(c.canonical(registry))
         self.denied(self.preflight)
 
-    def test_approval_refuses_resolved_release_and_sha_changes(self):
+    def test_packet_argument_schema_remains_checked_without_native_lookup(self):
+        packet=self.packet()
+        for argv in (None,[], 'claude',[None],[''],['claude','\x00'],['claude','--model']):
+            forged=copy.deepcopy(packet);forged['identity']['argv']=argv
+            with self.subTest(argv=argv),self.assertRaises(client.ClientError):
+                c.validate_packet(forged)
+
+    def test_launch_refuses_resolved_release_and_sha_changes(self):
         versions=self.base/'versions';versions.mkdir()
         for version in ('2.1.318','2.1.319'):
             (versions/version).write_bytes(b'\xcf\xfa\xed\xfe'+
@@ -176,12 +211,21 @@ sys.exit(13)
             packet=self.packet()
             self.approve()
             self.assertTrue(self.preflight()['ready'])
+            self.connect()
+            alternate=self.base/'alternate/versions';alternate.mkdir(parents=True)
+            other=alternate/'2.1.318';other.write_bytes((versions/'2.1.318').read_bytes())
+            other.chmod(0o700)  # New isolated fixture only; same version and bytes, different path.
+            self.binary.unlink();self.binary.symlink_to(other)
+            self.assertEqual(c.validate_packet(packet),c.hashes(packet))
+            self.denied(self.launch)
             self.binary.unlink();self.binary.symlink_to(versions/'2.1.319')
-            with self.assertRaises(client.ClientError):c.validate_packet(packet)
+            self.assertEqual(c.validate_packet(packet),c.hashes(packet))
+            self.denied(self.launch)
             self.denied(self.connect)
             self.binary.unlink();self.binary.symlink_to(versions/'2.1.318')
             with (versions/'2.1.318').open('ab') as binary:binary.write(b'changed bytes')
-            with self.assertRaises(client.ClientError):c.validate_packet(packet)
+            self.assertEqual(c.validate_packet(packet),c.hashes(packet))
+            self.denied(self.launch)
             self.denied(self.connect)
 
     def test_run_argv_names_use_explicit_contracts_before_authorisation(self):
@@ -820,6 +864,20 @@ sys.exit(13)
 
 
 class PublicSourceRaceTests(unittest.TestCase):
+    def test_native_fifo_is_refused_without_blocking(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            versions=Path(temporary).resolve()/'versions';versions.mkdir()
+            fifo=versions/'2.1.319';os.mkfifo(fifo,0o700)
+            code='''from memory_kit import client, context_authority as c
+import sys
+try: c._native([sys.argv[1]])
+except client.ClientError as error:
+    assert str(error)=='Native executable identity is unsafe.', str(error)
+else: raise AssertionError('FIFO accepted')
+'''
+            result=subprocess.run([sys.executable,'-c',code,str(fifo)],capture_output=True,text=True,timeout=2)
+            self.assertEqual(result.returncode,0,result.stderr)
+
     def test_read_refuses_parent_replacement_and_symlink(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary).resolve();parent=root/'parent';parent.mkdir()

@@ -304,9 +304,11 @@ embedded release metadata and observed SHA-256; it is not custody or authenticit
 attestation. SHA-256 binds reviewed bytes, not vendor authenticity. No invented
 executable protocol is exposed. The resolved `versions/<version>` path name and
 embedded VERSION marker must agree; unknown versions refuse without fallback.
-Packets record the actual selected contract. Packet validation and authorization
-refuse a changed contract, executable version, resolved path or SHA-256; approval
-under one binary does not survive an executable change.
+Packets record the actual selected contract. Operator packet validation checks
+only the recorded executable identity's self-consistency, without resolving or
+reading the coding user's executable. Authorization at launch freshly observes
+the executable as the coding user and refuses a changed contract, executable
+version, resolved path or SHA-256; an executable change requires fresh review.
 
 **2.1.319 observer candidate:** qualification rests on changelog review and binary
 string comparison. This is triage, not proof of identical loading behaviour.
