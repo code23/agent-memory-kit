@@ -109,6 +109,26 @@ Status: installer implemented on the candidate branch, with native component evi
 
 The public `code23/agent-memory-kit` repository stays the distribution and documentation home. Preserve its Git history and previous file-vault implementation while replacing the default onboarding only when the new path is actually installable. The client runs memory on their own Mac; no hosted deployment is implied.
 
+## Client Claude Code update policy (James, 9 November 2026)
+
+Agreed for when a real client install exists; nothing below is implemented yet.
+
+- **Security releases:** a Claude Code release that fixes a security problem
+  reaches client machines within 3 working days of its release.
+- **Routine releases:** other releases are taken once a month.
+- **Who clears a version:** the AI, not James. A qualification script triages the
+  release (changelog filter for context-loading changes plus a comparison of the
+  context source names in the old and new binaries), Codex reviews the result, and
+  if both pass the version is added as its own explicit contract entry. James is
+  told the outcome and steps in only when a check fails.
+
+Before the first client install this needs: the qualification script; version
+control through the `requiredMinimumVersion` / `requiredMaximumVersion` managed
+settings, which the observer must be taught to accept exactly (it refuses
+non-empty managed policy today); and a safe suspension path when qualification
+misses the 3-working-day window. Triage is not proof of identical loading
+behaviour; see the 2.1.319 observer candidate notes.
+
 ## Frozen acceptance
 
 - One Mac walkthrough names every required tool, account, permission, credential context and command. It has no undocumented database/role preparation step.
