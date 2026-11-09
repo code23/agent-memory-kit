@@ -476,15 +476,14 @@ def main():
     check("deny matches excerpt too", out["status"] == "skipped" and out["detail"] == "denied: private payroll" and not calls, str(out))
     for fact in ("The Example upgrade is priced at \u00a37,700 +VAT.", "The plan is 3,175 plus VAT per month.",
                  "Ad hoc support is 37/hr.", "Retainer: 9 hrs/mo at 3,100pm.", "Invoice 0009981 is the completion invoice.",
-                 "The base is [REDACTED:money]00 plus VAT.", "The fee is 175 GBP.", "Phase X is 31k + VAT.",
+                 "The fee is 175 GBP.", "Phase X is 31k + VAT.",
                  "Support is 2.5k a month.", "Our day rate is 620.", "A rate of 65 an hour applies.", "Billed at 65ph.",
                  "Contract work at 620 p/d.", "It came to 2750 pounds.", "Hosting is 3,100 pcm.", "The work was priced at 5,500."):
         reset()
         out, _ = route(cand(scope="org", ctype="decision", fact=fact), team_run)
-        check(f"client amount allowed unless sensitive: {fact[:30]}",
-              (out["status"] == "submitted" and len(calls) == 1
-               and calls[0][calls[0].index("--body") + 1].startswith(fact))
-              or (out["status"] == "skipped" and out["detail"] == "not eligible (scope/sensitivity/type)"), str(out))
+        check(f"client amount submitted: {fact[:30]}",
+              out["status"] == "submitted" and len(calls) == 1
+              and calls[0][calls[0].index("--body") + 1].startswith(fact), str(out))
     reset()
     out, _ = route(cand(scope="org", ctype="decision", fact="Backups run on Sunday."), team_run,
                    excerpt="Agreed at \u00a3640 plus VAT on the call.")

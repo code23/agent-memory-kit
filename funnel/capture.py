@@ -15,6 +15,7 @@ import yaml
 
 CODE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(CODE_DIR))
+from secret_patterns import SECRET_PATTERNS, policy_patterns
 import safe_io  # noqa: E402  (shared symlink-safe writer)
 ROOT = Path(os.environ.get("MEMORY_ROOT") or CODE_DIR).expanduser().resolve()
 CAND = ROOT / "candidates"
@@ -151,15 +152,9 @@ FACTS_JSON_SCHEMA = {
     },
 }
 
-# Parallel kind labels for secret redaction (match memory.py / policy.yaml order).
-_SECRET_PATTERNS = [
-    r"\bs[k]-[A-Za-z0-9]{8,}",
-    r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
-    r"(github|gitlab)\.com/",
-    r"export [A-Z_]{4,}",
-    r":\d{4,5}\b",
-]
-_SECRET_KINDS = ["api_key", "ipv4", "repo_url", "env_export", "port"]
+# Shared named defaults also protect capture before model extraction.
+_SECRET_PATTERNS = list(SECRET_PATTERNS.values())
+_SECRET_KINDS = list(SECRET_PATTERNS)
 
 
 
@@ -175,19 +170,13 @@ def _policy_path():
 
 
 def active_patterns():
-    """Built-in patterns plus every forbidden_pattern from the active policy (same file memory.py uses).
-
-    Policy patterns are index-aligned with _SECRET_KINDS; extras get the kind "secret".
-    """
+    """Built-in masks plus named patterns from the active policy; invalid policy fails closed."""
+    named = policy_patterns(yaml.safe_load(_policy_path().read_text()) or {})
     pats, kinds = list(_SECRET_PATTERNS), list(_SECRET_KINDS)
-    try:
-        pol = yaml.safe_load(_policy_path().read_text()) or {}
-        for pat in pol.get("forbidden_patterns") or []:
-            if isinstance(pat, str) and pat not in pats:
-                pats.append(pat)
-                kinds.append("secret")
-    except Exception:
-        pass
+    for kind, pat in named.items():
+        if (kind, pat) not in zip(kinds, pats):
+            pats.append(pat)
+            kinds.append(kind)
     return pats, kinds
 
 
@@ -798,7 +787,7 @@ def _self_checks():
     with tempfile.TemporaryDirectory() as td:
         td = Path(td).resolve()
         pol = td / "policy.yaml"
-        pol.write_text(yaml.safe_dump({"forbidden_patterns": [r"ACME-\d{4}"]}))
+        pol.write_text(yaml.safe_dump({"forbidden_patterns": {"secret": r"ACME-\d{4}"}}))
         note = td / "ACME-1234-notes.md"
         note.write_text("Ticket ACME-5678 says the weekly backup job runs on Sunday night.\n")
         seen = []

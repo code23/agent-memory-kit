@@ -20,8 +20,9 @@ read". The rule is simple: nothing reaches the trusted memory without evidence a
 2. **Evidence check.** Before any model sees the proposal, deterministic checks run. The
    source must exist, the excerpt must appear in it word for word, the source must be recent
    enough, the scope must be known, the type must be allowed, the risk must be low, and the
-   text must not contain secrets or contact details. Client money is allowed; private finance
-   stays out of team memory. Opinions and guesses
+   text must not contain secrets. Deterministic secret checks refuse secrets only;
+   Cockpit council judges flag personal contacts. Business emails, phone numbers and client
+   money are allowed; private finance and personal/family material stay out of team memory. Opinions and guesses
    ("I think", "probably") are refused. Anything that fails goes to review, not forward.
 3. **Second opinion.** Two reviewers judge the proposal against the source. Each returns
    promote, reject or hold. Two promotes means promote. Two rejects means reject. Any

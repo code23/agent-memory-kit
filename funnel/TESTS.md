@@ -29,7 +29,7 @@ python3 funnel/tests/test_doctor.py
 |------|------|--------|
 | Safe target paths | `memory.py` | relative `.md` under the vault is accepted; absolute, `..`, `~` and non-Markdown paths are rejected |
 | Safe append | `memory.py` | a directory swapped for a symlink between check and write is refused |
-| Secret redaction | `memory.py`, `capture.py`, `test_team_money.py` | email, key, IP, phone, repo, environment and port labels stay aligned; client prices remain unchanged |
+| Secret redaction | `memory.py`, `capture.py`, `test_team_money.py` | named key, IP, repo, environment, port, card and UK account masks; business contacts and client prices unchanged |
 | Source verification | `memory.py` | `verified`, `changed`, `missing`, `unreadable`; fail closed, so missing is never verified |
 | Review envelopes | `memory.py` | round trip, reason codes, judge verdicts, hashes |
 | Scope registry | `memory.py`, `capture.py` | aliases, destinations, unknown scopes park |

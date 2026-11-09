@@ -56,9 +56,10 @@ Every proposal needs a **source** (a path to something that can be re-read) and 
 **observed date**. The excerpt must be copied word for word from the source.
 
 **Never propose** secrets (passwords, tokens, keys, connection strings), raw transcripts,
-personal data about individuals or contact details. Client fees, quotes, job values and
-payment terms belong in team memory; private finance stays out. The checks refuse secrets and contact details
-anyway, and a refusal is logged. Do not try to rephrase around the check.
+private personal data about individuals or personal contact details. Client fees, quotes, job values and
+payment terms belong in team memory; private finance stays out. Business emails and phone numbers are legitimate team knowledge.
+Deterministic secret checks refuse secrets only; Cockpit council judges flag personal contacts.
+Personal and family material stays out. A refusal is logged; do not rephrase around it.
 
 ## Then the check
 

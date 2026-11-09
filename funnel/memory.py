@@ -31,6 +31,7 @@ import yaml
 # MEMORY_ROOT, which defaults to this directory.
 CODE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(CODE_DIR))
+from secret_patterns import policy_patterns
 import safe_io  # noqa: E402  (shared symlink-safe writer)
 ROOT = Path(os.environ.get("MEMORY_ROOT") or CODE_DIR).expanduser().resolve()
 _POLICY_PATH = Path(os.environ["MEMORY_POLICY"]).expanduser() if os.environ.get("MEMORY_POLICY") else None
@@ -98,10 +99,8 @@ SECRET_QUARANTINE_REASON_CODES = frozenset({"forbidden-pattern"})
 # Test failpoint: when True, append_notify_feed raises (outbox path).
 _NOTIFY_FEED_FAILPOINT = False
 
-# Labels parallel to policy.yaml forbidden_patterns (index-aligned).
-FORBIDDEN_PATTERN_KINDS = [
-    "api_key", "ipv4", "repo_url", "env_export", "port",
-]
+# Names come from the policy itself; order cannot change redaction labels.
+FORBIDDEN_PATTERN_KINDS = list(policy_patterns(POLICY))
 
 # Staging notes whose capture failed/pending get re-mined by `memory reconcile`.
 STAGING_OUTPUTS = Path(os.environ.get("STAGING_ROOT") or (CODE_DIR.parent / "staging")).expanduser() / "_outputs"
@@ -912,11 +911,14 @@ def redact_secrets(text, patterns=None, kinds=None):
     if text is None:
         return "", []
     s = str(text)
-    pats = patterns if patterns is not None else POLICY.get("forbidden_patterns") or []
-    klist = kinds if kinds is not None else FORBIDDEN_PATTERN_KINDS
+    if patterns is None:
+        named = policy_patterns(POLICY)
+        pats, klist = list(named.values()), list(named)
+    else:
+        pats, klist = patterns, (kinds if kinds is not None else FORBIDDEN_PATTERN_KINDS)
     hits = []
     # Apply longer/more-specific patterns first by scanning each independently
-    # and replacing matches; order follows policy list.
+    # and replacing matches; order follows the named policy mapping.
     for i, pat in enumerate(pats):
         kind = klist[i] if i < len(klist) else "secret"
         try:
@@ -1539,9 +1541,9 @@ def preflight(c, vault=None, registry=None):
     if c["risk"] not in POLICY["auto_promote_risk"]:
         return "review", "risk", f"risk '{c['risk']}' not auto-promotable"
     # Sensitivity keywords/names are TAGS only, do not park (collect_sensitivity_tags).
-    for pat in POLICY["forbidden_patterns"]:
+    for pat in policy_patterns(POLICY).values():
         if re.search(pat, blob):
-            return "review", "forbidden-pattern", "matched forbidden pattern (key/ip/repo/env/port)"
+            return "review", "forbidden-pattern", "matched forbidden pattern (key/ip/repo/env/port/card/account)"
     try:
         age = (datetime.date.today() - datetime.date.fromisoformat(str(c["observed_at"]))).days
         if age > POLICY["max_source_age_days"]:
@@ -2584,9 +2586,10 @@ TEAM_DENY_RETIRED_DEFAULT = (
     "legacy build loop", "oldtool")  # terms for systems you have retired
 TEAM_DENY_PRIVATE_DEFAULT = (
     "salary", "salaries", "compensation", "payroll", "pay rise", "employee review", "people review",
-    "performance review", "appraisal", "disciplinary",
-    "dividend", "corporation tax", "vat return", "hmrc", "tax position",
-    "billing dispute")
+    "performance review", "appraisal", "disciplinary", "director's loan", "directors loan", "director loan", "director's loans", "directors loans", "director loans", "dla", "s455",
+    "dividend", "dividends", "drawings", "pension", "pensions", "self assessment", "self-assessment",
+    "tax return", "tax returns", "corporation tax", "vat return", "vat returns", "loan relationship", "hmrc", "tax position",
+    "billing dispute", "purchase price", "paid james", "pays james", "payment to james", "payments to james", "consultancy invoice")
 # Client fees, quotes, job values and payment terms belong in team memory.
 # James, 2026-11-09: "yes we need money showing", reversing the 2026-10-14 amount ban.
 # James, 2026-11-09: business emails/phones stay unmasked for Cockpit CRM linking;
@@ -2664,7 +2667,7 @@ def team_route(c, src, scope):
     Returns None unless explicitly enabled (MEMORY_TEAM_ROUTING=1), else a dict:
     {"status": "submitted", "submission_id", "detail", "fact_sha256"} | {"status": "skipped", "detail"} |
     {"status": "error", "detail"}.
-    Order: eligibility, deny list (never fails open), duplicate checks (own history + live search;
+    Order: deny list (never fails open), eligibility, duplicate checks (own history + live search;
     live search fails open), submit.
     """
     if (os.environ.get("MEMORY_TEAM_ROUTING") or "0").strip() != "1":
@@ -2672,8 +2675,6 @@ def team_route(c, src, scope):
     try:
         if not _team_bin():
             return {"status": "error", "detail": "MEMORY_TEAM_BIN is not configured (absolute path required)"}
-        if not team_route_eligible(c, scope):
-            return {"status": "skipped", "detail": "not eligible (scope/sensitivity/type)"}
         fact = " ".join(str(c.get("fact") or "").split())
         sc = normalize_scope(str(scope))  # normalised form for tags only
         if sc is None:
@@ -2685,6 +2686,8 @@ def team_route(c, src, scope):
         denied = _team_denied_term(f"{fact}\n{excerpt}", reg)
         if denied:
             return {"status": "skipped", "detail": f"denied: {denied[0]} {denied[1]}"}
+        if not team_route_eligible(c, scope):
+            return {"status": "skipped", "detail": "not eligible (scope/sensitivity/type)"}
         fact_hash = hashlib.sha256(_team_norm_text(fact).encode("utf-8")).hexdigest()
         if fact_hash in _TEAM_SEEN_FACTS or fact_hash in _team_submitted_hashes():
             return {"status": "skipped", "detail": "duplicate of earlier submission (own history)",
