@@ -132,21 +132,39 @@ CONTEXT_STATE_KEYS = frozenset({
     'remoteControlSpawnMode', 'defaultToAgentsView', 'externalEditorContext',
 })
 INERT_STATE = {'excluded': 'inert-claude-state', 'classification': 'keys/v1'}
+EMPTY_STATE_KEYS = {
+    'allowedTools': list, 'mcpServers': dict, 'mcpContextUris': list,
+    'enabledMcpjsonServers': list, 'disabledMcpjsonServers': list,
+    'enabledMcpServers': list, 'disabledMcpServers': list,
+    'ignorePatterns': list, 'exampleFiles': list,
+}
+BOOLEAN_STATE_KEYS = frozenset({
+    'hasTrustDialogAccepted', 'hasTrustDialogHooksAccepted',
+    'hasClaudeMdExternalIncludesApproved', 'hasClaudeMdExternalIncludesWarningShown',
+    'bypassPermissionsModeAccepted',
+})
 
 
-def _classify_state(value):
+def _classify_state(value, project):
     """Fail closed at each loader scope; inert account/metrics values stay local."""
     def check_keys(mapping, allowed):
         if not isinstance(mapping, dict): fail('Malformed Claude Code state scope.')
-        if set(mapping) & CONTEXT_STATE_KEYS:
+        for key in set(mapping) & EMPTY_STATE_KEYS.keys():
+            if type(mapping[key]) is not EMPTY_STATE_KEYS[key] or mapping[key]:
+                fail('Context-affecting Claude Code state is unsupported.')
+        for key in set(mapping) & BOOLEAN_STATE_KEYS:
+            if type(mapping[key]) is not bool:
+                fail('Malformed Claude Code acceptance flag.')
+        classified = EMPTY_STATE_KEYS.keys() | BOOLEAN_STATE_KEYS
+        if set(mapping) & (CONTEXT_STATE_KEYS - classified):
             fail('Context-affecting Claude Code state is unsupported.')
-        if set(mapping) - allowed:
+        if set(mapping) - allowed - classified:
             fail('Unknown Claude Code state key is unsupported.')
     check_keys(value, INERT_STATE_KEYS | {'projects'})
     projects = value.get('projects', {})
     if not isinstance(projects, dict): fail('Malformed Claude Code project state.')
-    for project in projects.values():
-        check_keys(project, INERT_PROJECT_STATE_KEYS)
+    if str(project) in projects:
+        check_keys(projects[str(project)], INERT_PROJECT_STATE_KEYS)
     return dict(INERT_STATE)
 
 
@@ -185,8 +203,10 @@ def _native(argv):
             fail('Native executable or ancestor custody is unsafe.')
     from .client import _directory
     with _directory(path.parent) as fd:
+        security._check_acl(fd)
         opened = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
         try:
+            security._check_acl(opened)
             before = os.fstat(opened)
             if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
                     or before.st_uid not in (0, os.getuid()) or before.st_mode & 0o022):
@@ -276,7 +296,7 @@ def _read(path):
         finally:os.close(opened)
 
 
-def _classified(path, kind='markdown'):
+def _classified(path, kind='markdown', project=None):
     data=_read(path)
     if data is None:return None
     try:text=data.decode('utf-8')
@@ -288,7 +308,7 @@ def _classified(path, kind='markdown'):
         if 'model' in value and not isinstance(value['model'],str):fail('Invalid native model setting.')
         if 'permissions' in value and value['permissions'] not in ({},{'defaultMode':'bypassPermissions'}):fail('Unsupported permission settings mechanism.')
     elif kind=='state':
-        return _classify_state(parse(text))
+        return _classify_state(parse(text), project)
     elif kind=='empty':
         if parse(text)!={}:fail('Nonempty managed policy/global configuration is unsupported.')
     elif kind=='mcp':
@@ -636,17 +656,18 @@ def observe(project, workspace, url, instance, argv, software_digest):
         _check_plan(metadata)
         for path, kind in slots.items():
             if kind is not None:
-                inventory[path] = _classified(Path(path), kind)
+                inventory[path] = (_classified(Path(path), kind, project=project) if kind == 'state'
+                                   else _classified(Path(path), kind))
         _require_auto_memory_disabled(inventory, config / 'settings.json')
         projects = config / 'projects'
         inventory[str(projects)] = {'inactive': INACTIVE_AUTO_MEMORY,
                                     'present': metadata['paths'][str(projects)][0] is not None}
         if client._snapshot(project/client.PROFILE_NAME) is None:
-            _,_,outputs,_=client._prepare_binding(project,workspace,url,instance,reviewed=True)
+            _,_,outputs,_=client._prepare_binding(project,workspace,url,instance)
         else:
             loaded=client._load_profile(project/client.PROFILE_NAME)
             if (loaded['workspace'],loaded['url'])!=(workspace,url):fail('Context workspace/service changed.')
-            outputs=client._verify(project,loaded,reviewed=True)
+            outputs=client._verify(project,loaded)
         current=dict(inventory);prospective=dict(inventory)
         for name in client._FILES:
             prospective[str(project/name)]={'text':outputs[name].decode(),'sha256':digest(outputs[name])}
@@ -726,7 +747,9 @@ def validate_packet(packet):
 def registry(fd, uid):
     try:
         value = parse(read_at(fd, 'registry.json', uid))
-    except (PermissionError, FileNotFoundError):
+    except FileNotFoundError:
+        fail('Context registry is missing; ask the operator to bootstrap the context authority.')
+    except PermissionError:
         fail('Context registry is not readable; ask the operator to repair its published mode.')
     if (set(value) != {'version', 'generation', 'approval'} or value['version'] != 1
             or type(value['generation']) is not int or value['generation'] < 1

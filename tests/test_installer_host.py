@@ -653,18 +653,121 @@ class HostTests(unittest.TestCase):
         self.assertTrue(path.exists())
 
     def test_start_timeout_still_stops_owned_cluster_during_install(self):
-        with patch.object(host, '_start_pg', side_effect=host.HostError('start timeout')):
+        def timeout(config):
+            self.postmaster(config)
+            raise host.HostError('start timeout')
+        with self.verified_pg_tools(), patch.object(host, '_start_pg', side_effect=timeout):
             with self.assertRaisesRegex(host.HostError, 'start timeout'):
                 host.install(self.preflight, self.store)
         self.assertEqual(self.calls[-1][0][-1], 'stop')
+        self.assertFalse(self.calls[-1][1]['check'])
+
+    def postmaster(self, config):
+        pid = Path(config['root']) / 'postgres/postmaster.pid'
+        pid.write_text('12345\n')
+        pid.chmod(0o600)  # New isolated fixture only.
+
+    @contextlib.contextmanager
+    def verified_pg_tools(self):
+        original = self.runner.side_effect
+        def command(argv, **kwargs):
+            if str(argv[-1]) == '--version':
+                return types.SimpleNamespace(returncode=0, stdout=b'pg_ctl (PostgreSQL) 18.1\n')
+            if str(argv[-1]) == 'status':
+                return types.SimpleNamespace(returncode=0)
+            return original(argv, **kwargs)
+        with patch.object(host, '_coding_identity', return_value=self.identity), \
+             patch.object(host, '_tool', side_effect=lambda path, identity: str(path)), \
+             patch.object(host, 'command', side_effect=command):
+            yield
+
+    def test_start_failure_without_postmaster_preserves_error_and_never_stops(self):
+        original = self.command
+        def fail_start(argv, **kwargs):
+            if str(argv[-1]) == 'start':
+                raise host.HostError('original start failure')
+            if str(argv[-1]) == 'stop':
+                raise host.HostError('incorrect stop masked original')
+            return original(argv, **kwargs)
+        self.runner.side_effect = fail_start
+        with self.assertRaisesRegex(host.HostError, 'original start failure'):
+            host.install(self.preflight, self.store)
+        config = json.loads((self.root / 'config.json').read_text())
+        config['pg_tools'] = self.preflight['pg_tools']
+        with patch.object(host, 'credential', return_value='fixture'), \
+             patch.object(host.signal, 'signal', wraps=host.signal.signal) as handlers:
+            with self.assertRaisesRegex(host.HostError, 'original start failure'):
+                host.daemon(config)
+        self.assertEqual(handlers.call_count, 4)  # Install and restore both handlers.
+        self.assertFalse(any(argv[-1] == 'stop' for argv, _ in self.calls))
+
+    def test_daemon_refuses_custody_before_start_or_stop(self):
+        config = self.install()
+        self.guard.side_effect = host.security.SecurityError('unsafe custody')
+        with patch.object(host, 'credential', return_value='fixture'), \
+             patch.object(host, '_start_pg') as start, patch.object(host, '_pg') as pg:
+            with self.assertRaisesRegex(host.security.SecurityError, 'unsafe custody'):
+                host.daemon(config)
+        start.assert_not_called()
+        pg.assert_not_called()
+
+    def test_daemon_signal_during_pg_start_never_spawns(self):
+        config = self.install()
+        handlers = {}
+        def handler(sig, callback): handlers[sig] = callback
+        def start(config): handlers[host.signal.SIGTERM](host.signal.SIGTERM, None)
+        with patch.object(host, 'credential', return_value='fixture'), \
+             patch.object(host, '_start_pg', side_effect=start), \
+             patch.object(host.signal, 'signal', side_effect=handler), \
+             patch.object(host.subprocess, 'Popen') as child:
+            self.assertEqual(host.daemon(config), 0)
+        child.assert_not_called()
 
     def test_daemon_start_failure_still_stops_owned_cluster(self):
-        with patch.object(host, 'credential', return_value='fixture'), \
-             patch.object(host, '_start_pg', side_effect=host.HostError('start timeout')), \
-             patch.object(host, '_pg') as stop:
+        config = self.install()
+        def timeout(config):
+            self.postmaster(config)
+            raise host.HostError('start timeout')
+        with self.verified_pg_tools(), patch.object(host, 'credential', return_value='fixture'), \
+             patch.object(host, '_start_pg', side_effect=timeout):
             with self.assertRaisesRegex(host.HostError, 'start timeout'):
-                host.daemon({'node': 'fixture'})
-        stop.assert_called_once_with({'node': 'fixture'}, '-w', '-t', '30', '-m', 'fast', 'stop')
+                host.daemon(config)
+        self.assertEqual(self.calls[-1][0][-1], 'stop')
+        self.assertFalse(self.calls[-1][1]['check'])
+
+    def test_daemon_cleanup_refuses_unverified_pid_and_preserves_start_error(self):
+        config = self.install()
+        def fail(config):
+            self.postmaster(config)
+            (self.root / 'postgres/postmaster.pid').chmod(0o644)  # Isolated unsafe fixture.
+            raise host.HostError('original start failure')
+        self.calls.clear()
+        with patch.object(host, 'credential', return_value='fixture'), \
+             patch.object(host, '_start_pg', side_effect=fail), \
+             patch.object(host.signal, 'signal', wraps=host.signal.signal) as handlers:
+            with self.assertRaisesRegex(host.HostError, 'original start failure'):
+                host.daemon(config)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(handlers.call_count, 4)
+
+    def test_daemon_stop_command_failure_never_masks_start_error(self):
+        config = self.install()
+        def fail(config):
+            self.postmaster(config)
+            raise host.HostError('original start failure')
+        original = self.runner.side_effect
+        def stop_failure(argv, **kwargs):
+            if str(argv[-1]) == 'stop':
+                self.assertFalse(kwargs['check'])
+                raise host.HostError('cleanup launch failure')
+            return original(argv, **kwargs)
+        self.runner.side_effect = stop_failure
+        with self.verified_pg_tools(), patch.object(host, 'credential', return_value='fixture'), \
+             patch.object(host, '_start_pg', side_effect=fail), \
+             patch.object(host.signal, 'signal', wraps=host.signal.signal) as handlers:
+            with self.assertRaisesRegex(host.HostError, 'original start failure'):
+                host.daemon(config)
+        self.assertEqual(handlers.call_count, 4)
 
     def test_daemon_signal_during_spawn_is_not_lost(self):
         config = self.install()
@@ -698,10 +801,11 @@ class HostTests(unittest.TestCase):
         original = self.command
         def fail_bootstrap(argv, **kwargs):
             if any(str(arg).endswith("team-memory-bootstrap.mjs") for arg in argv):
+                self.postmaster({'root': str(self.root)})
                 raise host.HostError("runtime refused")
             return original(argv, **kwargs)
         self.runner.side_effect = fail_bootstrap
-        with self.assertRaisesRegex(host.HostError, "runtime refused"):
+        with self.verified_pg_tools(), self.assertRaisesRegex(host.HostError, "runtime refused"):
             host.install(self.preflight, self.store)
         self.assertEqual(self.calls[-1][0][-1], "stop")
         self.assertEqual(self.calls[-1][0][self.calls[-1][0].index("-D") + 1], str(self.root / "postgres"))

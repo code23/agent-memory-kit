@@ -285,14 +285,23 @@ def _pg_status(config):
         return SimpleNamespace(returncode=4)
 
 
-def _stop_owned_pg(config):
+def _stop_owned_pg(config, *, check=True):
     result = _pg_status(config)
     if result.returncode == 4:
         raise HostError("PostgreSQL tools are unavailable; restore PostgreSQL 18 to stop the owned cluster")
     if result.returncode == 0:
         selector = Path(config.get("pg_selector", config["pg_bin"]))
         binary = _tool(selector / "pg_ctl", _coding_identity(config))
-        _pg(dict(config, pg_tools={"pg_ctl": binary}), "-w", "-t", "30", "-m", "fast", "stop")
+        _pg(dict(config, pg_tools={"pg_ctl": binary}), "-w", "-t", "30", "-m", "fast", "stop", check=check)
+
+
+def _cleanup_pg(config):
+    """Best-effort shutdown of a verified postmaster; preserve the startup error."""
+    try:
+        if (Path(config["root"]) / "postgres/postmaster.pid").exists():
+            _stop_owned_pg(config, check=False)
+    except (HostError, security.SecurityError, OSError):
+        pass
 
 
 def _cluster_signature(config):
@@ -312,11 +321,14 @@ def _cluster_signature(config):
     return signature
 
 
-def _start_pg(config):
+def _validate_pg_custody(config):
     root = Path(config["root"])
     security.assert_private_root(root, Path(__file__).resolve().parent.parent, config["owner_uid"])
     data = root / "postgres"
     security.ensure_private_directory(data, config["owner_uid"])
+
+
+def _start_pg(config):
     _cluster_signature(config)
     socket_dir = _socket_directory(config, create=True)
     # /dev/null prevents query/error text from becoming a persistent secret-bearing log.
@@ -511,13 +523,14 @@ def install(preflight, keychain=None):
         if config["phase"] != "installed":
             config["phase"] = "cluster_ready"
         _save_config(root / "config.json", config, uid)
+        _validate_pg_custody(config)
         try:
             _start_pg(config)
             _bootstrap(config, values)
             config["phase"] = "installed"
             _save_config(root / "config.json", config, uid)
         finally:
-            _pg(config, "-w", "-t", "30", "-m", "fast", "stop")
+            _cleanup_pg(config)
         return {"installed": True, "workspace": config["workspace"], "data_preserved": True}
     finally:
         os.close(lock_fd)
@@ -658,6 +671,7 @@ def uninstall(config):
 def daemon(config, keychain=None):
     """launchd child: own PostgreSQL, retrieve only submitter credentials, drain on stop."""
     dsn = credential(config, "submitter", keychain)
+    _validate_pg_custody(config)
     child = None
     stopping = False
     def shutdown(signum, frame):
@@ -668,6 +682,8 @@ def daemon(config, keychain=None):
     previous = {sig: signal.signal(sig, shutdown) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         _start_pg(config)
+        if stopping:
+            return 0
         child = subprocess.Popen([config["node"], str(_software(config) / "runtime/team-memory-server.mjs"),
                                   "--allow-submissions"],
                                  env=clean_env(dict(_database_env(config, dsn), PORT=str(SERVICE_PORT))),
@@ -683,9 +699,11 @@ def daemon(config, keychain=None):
             except subprocess.TimeoutExpired:
                 child.kill()
                 child.wait()
-        _pg(config, "-w", "-t", "30", "-m", "fast", "stop")
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        try:
+            _cleanup_pg(config)
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 def operator(config, argv, keychain=None):

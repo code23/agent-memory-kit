@@ -199,11 +199,12 @@ sys.exit(13)
                     'enabledMcpServers', 'disabledMcpServers', 'enableAllProjectMcpServers',
                     'hasClaudeMdExternalIncludesApproved', 'hasTrustDialogAccepted', 'allowedTools',
                     'hooks', 'env', 'permissions', 'autoMemoryDirectory', 'futureUnknownKey'):
-            for state in ({key: {}}, {'projects': {str(self.project): {key: []}}}):
+            for state in ({key: {'fictional': 'nonempty'}},
+                          {'projects': {str(self.project): {key: ['fictional-nonempty']}}}):
                 path.write_text(json.dumps(state))
                 with self.subTest(key=key, project='projects' in state), self.assertRaises(client.ClientError):
                     self.packet()
-        for state in ({'projects': []}, {'projects': {'fixture': []}}):
+        for state in ({'projects': []}, {'projects': {str(self.project): []}}):
             path.write_text(json.dumps(state))
             with self.assertRaises(client.ClientError): self.packet()
 
@@ -228,6 +229,75 @@ sys.exit(13)
         with patch.object(c, 'read_at', side_effect=PermissionError('fixture')):
             with self.assertRaisesRegex(client.ClientError, 'registry.*readable'):
                 c.registry(-1, self.uid)
+
+    def test_missing_registry_has_its_own_refusal(self):
+        with patch.object(c, 'read_at', side_effect=FileNotFoundError('fixture')):
+            with self.assertRaisesRegex(client.ClientError, 'registry is missing'):
+                c.registry(-1, self.uid)
+
+    def test_native_acl_checked_on_open_parent_and_executable(self):
+        self.binary.write_bytes(b'\xcf\xfa\xed\xfe' +
+            b'README_URL:"https://code.claude.com/docs/en/overview",VERSION:"2.1.318"')
+        for target in (self.binary.parent, self.binary):
+            def acl(fd, private=False):
+                if os.fstat(fd).st_ino == target.stat().st_ino:
+                    raise security.SecurityError('unsafe fixture ACL')
+            with self.subTest(target=target.name), patch.object(security, '_check_acl', side_effect=acl):
+                with self.assertRaisesRegex(security.SecurityError, 'unsafe fixture ACL'):
+                    REAL_NATIVE(self.argv)
+
+    def test_real_structure_defaults_allow_second_launch_without_exporting_state(self):
+        state = json.loads((Path(__file__).parent / 'fixtures/claude-state-2.1.319.json').read_text())
+        selected = state['projects'].pop('/fictional/selected')
+        defaults = {key: selected.pop(key) for key in list(selected)
+                    if key in ('allowedTools', 'mcpServers', 'mcpContextUris',
+                               'enabledMcpjsonServers', 'disabledMcpjsonServers',
+                               'disabledMcpServers', 'ignorePatterns', 'exampleFiles',
+                               'hasTrustDialogAccepted', 'hasTrustDialogHooksAccepted',
+                               'hasClaudeMdExternalIncludesApproved',
+                               'hasClaudeMdExternalIncludesWarningShown')}
+        state['projects'][str(self.project)] = selected
+        path = self.home / '.claude.json'
+        path.write_text(json.dumps(state))
+        self.native_version = '2.1.319'
+        native = self.binary.with_name(self.native_version)
+        native.write_bytes(self.binary.read_bytes())
+        native.chmod(0o700)  # New isolated fixture only.
+        self.binary = native
+        self.argv[0] = str(native)
+        self.approve(); self.connect()
+        self.assertEqual(self.launch(), 13)
+        selected.update(defaults)  # First launch saves the native project's default fields.
+        state['bypassPermissionsModeAccepted'] = True
+        selected['hasTrustDialogAccepted'] = True
+        selected['lastCost'] = 2.5
+        path.write_text(json.dumps(state))
+        self.assertEqual(self.launch(), 13)
+        packet = c.canonical(self.packet()).decode()
+        self.assertNotIn('fictional-private', packet)
+        self.assertNotIn('/fictional/other', packet)
+        self.assertNotIn('fictional-private', (self.registry_root / 'registry.json').read_text())
+
+    def test_state_defaults_require_exact_empty_types_and_boolean_flags(self):
+        path = self.home / '.claude.json'
+        defaults = {'allowedTools': [], 'mcpServers': {}, 'mcpContextUris': [],
+                    'enabledMcpjsonServers': [], 'disabledMcpjsonServers': [],
+                    'bypassPermissionsModeAccepted': False, 'hasTrustDialogAccepted': True}
+        for scope in ('global', 'selected'):
+            def write(value):
+                state = value if scope == 'global' else {'projects': {str(self.project): value}}
+                path.write_text(json.dumps(state))
+            write(defaults)
+            self.packet()
+            for key, bad in (('allowedTools', {}), ('mcpServers', []),
+                             ('mcpContextUris', ['fictional-context']),
+                             ('enabledMcpjsonServers', ['fictional-server']),
+                             ('disabledMcpjsonServers', ['fictional-server']),
+                             ('bypassPermissionsModeAccepted', 1),
+                             ('hasTrustDialogAccepted', [])):
+                with self.subTest(scope=scope, key=key):
+                    write({**defaults, key: bad})
+                    with self.assertRaises(client.ClientError): self.packet()
 
     def test_native_executable_refuses_group_writable_parent(self):
         self.binary.write_bytes(b'\xcf\xfa\xed\xfe' +
@@ -346,11 +416,10 @@ sys.exit(13)
     def test_run_argv_names_use_explicit_contracts_before_authorisation(self):
         self.approve();self.connect()
         for name in ('claude','2.1.318','2.1.319','2.1.317','2.1.320'):
-            with self.subTest(name=name),patch.object(client,'_check_logthis') as early, \
+            with self.subTest(name=name), \
                     patch.object(c,'decision',side_effect=client.ClientError('fixture stop')):
                 with self.assertRaisesRegex(client.ClientError,'fixture stop'):
                     client.run(self.project/client.PROFILE_NAME,[str(self.base/name)],self.store)
-                early.assert_not_called()  # Native identity is checked only by decision().
 
     @contextmanager
     def foreign_memory_guard(self, projects):
@@ -398,12 +467,12 @@ sys.exit(13)
         (private / 'CLAUDE.md').write_text('foreign moved instruction')
         original = c._classified
         swapped = []
-        def replace_before_read(path, kind='markdown'):
+        def replace_before_read(path, kind='markdown', project=None):
             if Path(path) == active / 'CLAUDE.md' and not swapped:
                 active.rename(self.project / 'retired-active')
                 private.rename(active)
                 swapped.append(True)
-            return original(path, kind)
+            return original(path, kind, project=project)
         real_read = os.read
         def no_foreign_read(fd, count):
             info = os.fstat(fd)
@@ -454,12 +523,11 @@ sys.exit(13)
     def test_public_run_refused_plan_precedes_all_early_readers(self):
         with patch.object(c, '_plan_sources', side_effect=client.ClientError('plan refused')), \
                 patch.object(client, '_load_profile') as profile, \
-                patch.object(client, '_check_logthis') as fallback, \
                 patch.object(self.store, 'get') as credential, \
                 patch.object(subprocess, 'Popen') as child:
             with self.assertRaisesRegex(client.ClientError, 'plan refused'):
                 client.run(self.project / client.PROFILE_NAME, self.argv, self.store)
-        for operation in (profile, fallback, credential, child): operation.assert_not_called()
+        for operation in (profile, credential, child): operation.assert_not_called()
 
     def test_real_home_ancestor_uses_selected_global_config_slots(self):
         project = self.home / 'Projects' / 'app'

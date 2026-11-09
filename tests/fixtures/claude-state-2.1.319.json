@@ -1,0 +1,54 @@
+{
+  "numStartups": 2,
+  "userID": "fictional-private-user",
+  "oauthAccount": {
+    "fixture": "fictional-private-account"
+  },
+  "projects": {
+    "/fictional/selected": {
+      "allowedTools": [],
+      "mcpServers": {},
+      "mcpContextUris": [],
+      "enabledMcpjsonServers": [],
+      "disabledMcpjsonServers": [],
+      "disabledMcpServers": [],
+      "ignorePatterns": [],
+      "exampleFiles": [],
+      "hasTrustDialogAccepted": false,
+      "hasTrustDialogHooksAccepted": false,
+      "hasClaudeMdExternalIncludesApproved": false,
+      "hasClaudeMdExternalIncludesWarningShown": false,
+      "lastCost": 0,
+      "lastDuration": 10,
+      "lastAPIDuration": 8,
+      "lastAPIDurationWithoutRetries": 8,
+      "lastToolDuration": 2,
+      "lastLinesAdded": 0,
+      "lastLinesRemoved": 0,
+      "lastTotalInputTokens": 1,
+      "lastTotalOutputTokens": 1,
+      "lastTotalCacheCreationInputTokens": 0,
+      "lastTotalCacheReadInputTokens": 0,
+      "lastTotalWebSearchRequests": 0,
+      "lastModelUsage": {},
+      "lastFpsAverage": 60,
+      "lastFpsLow1Pct": 30,
+      "lastSessionId": "fictional-private-session",
+      "lastSessionMetrics": {
+        "fictionalMetric": 1
+      },
+      "lastSessionModified": 1,
+      "lastStartTime": 1,
+      "lastGracefulShutdown": true,
+      "lastVersionBase": "fictional"
+    },
+    "/fictional/other": {
+      "mcpServers": {
+        "fictional-private-server": {
+          "command": "fictional-private-command"
+        }
+      },
+      "futureUnknownKey": "fictional-private-other-state"
+    }
+  }
+}

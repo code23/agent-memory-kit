@@ -26,7 +26,6 @@ END = "<!-- /agent-memory:business:v1 -->"
 TOML_BEGIN = "# agent-memory:business:v1"
 TOML_END = "# /agent-memory:business:v1"
 _FILES = (".mcp.json", ".codex/config.toml", "AGENTS.md", "CLAUDE.md")
-_ROUTING = re.compile(r"\blog[ \t_-]*this\b", re.IGNORECASE)
 _LOCK = ".agent-memory-connect.lock"
 
 
@@ -249,65 +248,6 @@ def _client_homes():
     return homes
 
 
-def _instruction_roots(project):
-    for root in (project,) + tuple(project.parents):
-        if _identity(root) == _identity(_home()):
-            break  # Global bodies remain private; inspect known path existence only.
-        yield root
-        if os.path.lexists(str(root / ".git")):
-            break
-
-
-def _check_logthis(project):
-    # Inspect existence only. Private skill contents are never opened or copied.
-    roots = (project,) + tuple(project.parents)
-    scoped = list(_instruction_roots(project))
-    if not any(os.path.lexists(str(root / ".git")) for root in scoped):
-        scoped = [project]
-    prefixes = (".agents/skills", ".codex/skills", ".claude/skills", ".claude/commands",
-                ".codex/prompts", ".codex/commands", ".agents/commands")
-    candidates = [prefix + "/" + name + suffix for prefix in prefixes
-                  for name in ("logthis", "log-this", "log_this", "log this") for suffix in ("", ".md")]
-    if any(os.path.lexists(str(root / relative)) for root in (_home(),) + roots for relative in candidates):
-        raise ClientError("This candidate does not support existing log this/logthis command paths. Keep them intact and use a separate clean coding context.")
-    for index, native_home in enumerate(_client_homes()):
-        instruction_paths = ("AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md")
-        if index == 1:
-            instruction_paths += ("rules",)
-        if any(os.path.lexists(str(native_home / relative)) for relative in
-               instruction_paths):
-            raise ClientError("This candidate does not support existing global instruction files or Claude rules. Keep them intact and use a separate clean coding profile.")
-        if any(os.path.lexists(str(native_home / prefix / (name + suffix)))
-               for prefix in ("skills", "commands", "prompts")
-               for name in ("logthis", "log-this", "log_this", "log this") for suffix in ("", ".md")):
-            raise ClientError("This candidate does not support global log this/logthis command paths. Keep them intact and use a separate clean coding context.")
-    for root in roots:
-        if root != project and os.path.lexists(str(root / PROFILE_NAME)):
-            raise ClientError("An ancestor project already has a business-memory binding; select its root or separate this project explicitly.")
-        if root not in scoped:
-            if any(os.path.lexists(str(root / relative)) for relative in
-                   ("AGENTS.md", "AGENTS.override.md", "CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md", ".claude/rules")):
-                raise ClientError("This candidate does not support governing instruction files outside the repository. Keep them intact and select a clean project context.")
-            continue
-        if os.path.lexists(str(root / "AGENTS.override.md")) or os.path.lexists(str(root / ".claude/rules")):
-            raise ClientError("This candidate does not support AGENTS.override.md or .claude/rules. Keep them intact and select a clean project context.")
-        for relative in ("AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md"):
-            if root == project and relative in ("AGENTS.md", "CLAUDE.md"):
-                continue
-            text = _text(_snapshot(root / relative))
-            if _ROUTING.search(text) or BEGIN in text or END in text:
-                raise ClientError("This candidate does not support ambiguous log this/business-memory routing in project or ancestor " + relative + ". Keep it intact and select a clean project context.")
-        if root != project:
-            for relative in (".mcp.json", ".codex/config.toml"):
-                text = _text(_snapshot(root / relative))
-                try:
-                    parsed = (_json(text) if relative.endswith(".json") else tomllib.loads(text)) if text else {}
-                except ValueError:
-                    raise ClientError("An ancestor client configuration is invalid; review it before binding.") from None
-                if TOKEN_ENV in text or _uses_token(parsed):
-                    raise ClientError("An ancestor client configuration reuses the business credential variable; resolve it before binding.")
-
-
 def _capture_contract(workspace):
     return {'entrypoint':'existing logthis', 'default':'prior route', 'personal':'prior route',
             'explicit_business':{'workspace':workspace,'tool':'memory_submit','state':'pending',
@@ -327,11 +267,9 @@ def _binding(workspace):
     ))
 
 
-def _instructions(old, workspace, filename, reviewed=False):
+def _instructions(old, workspace):
     if BEGIN in old or END in old:
         raise ClientError("An unmanaged or incomplete business-memory instruction block already exists.")
-    if not reviewed and _ROUTING.search(old):
-        raise ClientError(filename + " contains ambiguous log this/logthis text; this candidate refuses that instruction context without changing it.")
     return (old + ("\n" if old.endswith("\n") else "\n\n") if old else "") + _binding(workspace) + "\n"
 
 
@@ -362,7 +300,7 @@ def _region(text, begin, end):
     return text[start:finish], text[:start] + text[finish:]
 
 
-def _managed_parts(data, workspace, url, reviewed=False):
+def _managed_parts(data, workspace, url):
     """Validate the exact managed scope while allowing unrelated project edits."""
     try:
         mcp = _json(data[".mcp.json"].decode("utf-8"))
@@ -402,8 +340,6 @@ def _managed_parts(data, workspace, url, reviewed=False):
         region, outside = _region(instructions, BEGIN, END)
         if region != _binding(workspace):
             raise ClientError("The managed instruction binding is inconsistent with its profile.")
-        if not reviewed and _ROUTING.search(outside):
-            raise ClientError(relative + " contains ambiguous log this/logthis text outside the managed block; this candidate refuses that instruction context without changing it.")
         parts[relative] = region.encode()
     return parts
 
@@ -418,15 +354,13 @@ def _uses_token(value):
     return False
 
 
-def _profile(workspace, url, instance, data, reviewed=False):
-    parts = _managed_parts(data, workspace, url, reviewed=reviewed)
+def _profile(workspace, url, instance, data):
+    parts = _managed_parts(data, workspace, url)
     return {"version": 2, "workspace": workspace, "url": url, "keychain_instance": instance,
             "managed_hashes": {relative: _digest(value) for relative, value in parts.items()}}
 
 
-def _verify(project, profile, reviewed=False):
-    if not reviewed:
-        _check_logthis(project)
+def _verify(project, profile):
     _safe_path(project / ".codex", directory=True)
     data = {}
     for relative in _FILES:
@@ -434,7 +368,7 @@ def _verify(project, profile, reviewed=False):
         if snapshot is None:
             raise ClientError("A managed binding file is missing; restore it from reviewed project history.")
         data[relative] = snapshot[3]
-    parts = _managed_parts(data, profile["workspace"], profile["url"], reviewed=reviewed)
+    parts = _managed_parts(data, profile["workspace"], profile["url"])
     if any(_digest(value) != profile["managed_hashes"][relative] for relative, value in parts.items()):
         raise ClientError("Binding checksum failed; restore the profile and managed content from reviewed project history.")
     return data
@@ -484,9 +418,7 @@ def _replace(path, expected, data):
 
 
 
-def _prepare_binding(project, workspace, url, instance, reviewed=False):
-    if not reviewed:
-        _check_logthis(project)
+def _prepare_binding(project, workspace, url, instance):
     codex_directory = project / ".codex"
     codex_info = _safe_path(codex_directory, directory=True)
     snapshots = {relative: _snapshot(project / relative) for relative in _FILES}
@@ -512,8 +444,8 @@ def _prepare_binding(project, workspace, url, instance, reviewed=False):
         raise ClientError("Existing Codex MCP namespace cannot safely accept a new table; inspect it before binding.") from None
     outputs = {".mcp.json": (json.dumps(mcp, indent=2) + "\n").encode(), ".codex/config.toml": toml.encode()}
     for relative in ("AGENTS.md", "CLAUDE.md"):
-        outputs[relative] = _instructions(_text(snapshots[relative]), workspace, relative, reviewed=reviewed).encode()
-    profile = _profile(workspace, url, instance, outputs, reviewed=reviewed)
+        outputs[relative] = _instructions(_text(snapshots[relative]), workspace).encode()
+    profile = _profile(workspace, url, instance, outputs)
     outputs[PROFILE_NAME] = (json.dumps(profile, indent=2) + "\n").encode()
     snapshots[PROFILE_NAME] = None
     return codex_info, snapshots, outputs, profile
@@ -534,12 +466,12 @@ def _connect(project: Path, workspace: str, url: str, token: bytes, keychain, in
         profile = _load_profile(profile_path)
         if (profile["workspace"], profile["url"], profile["keychain_instance"]) != (workspace, url, instance):
             raise ClientError("Project is already bound to another workspace, service or Keychain instance.")
-        _verify(project, profile, reviewed=True)
+        _verify(project, profile)
         if keychain.get(instance, "agent") != token:
             raise ClientError("The existing project credential does not match; use reconnect with a fresh Keychain instance for rotation.")
         return profile
     codex_directory = project / ".codex"
-    codex_info, snapshots, outputs, profile = _prepare_binding(project, workspace, url, instance, reviewed=True)
+    codex_info, snapshots, outputs, profile = _prepare_binding(project, workspace, url, instance)
     stored = keychain.get(instance, "agent")
     if stored is not None and stored != token:
         raise ClientError("The selected Keychain instance has a different agent credential.")
@@ -623,11 +555,11 @@ def _reconnect(project: Path, workspace: str, url: str, token: bytes, keychain, 
         raise ClientError("Reconnect cannot change the business workspace or MCP service URL.")
     if instance == profile["keychain_instance"]:
         raise ClientError("Rotation requires a fresh Keychain instance; existing items are immutable.")
-    data = _verify(project, profile, reviewed=True)
+    data = _verify(project, profile)
     stored = keychain.get(instance, "agent")
     if stored is not None and stored != token:
         raise ClientError("The selected Keychain instance already contains another agent credential.")
-    replacement = _profile(workspace, url, instance, data, reviewed=True)
+    replacement = _profile(workspace, url, instance, data)
     with _binding_lock(project):
         if _snapshot(profile_path) != before:
             raise ClientError("Project binding changed concurrently; no rotation was performed.")
@@ -657,7 +589,7 @@ def _check_connection(project: Path, workspace: str, url: str, keychain, instanc
     if _snapshot(path) is None:
         if rekey:
             raise ClientError("Reconnect requires an existing business-memory project binding.")
-        _prepare_binding(project, workspace, url, instance, reviewed=True)
+        _prepare_binding(project, workspace, url, instance)
     else:
         if not rekey:
             raise ClientError("This project is already bound; preflight a fresh instance with --rekey before minting a replacement token.")
@@ -666,7 +598,7 @@ def _check_connection(project: Path, workspace: str, url: str, keychain, instanc
             raise ClientError("Connection preflight cannot redirect the existing business workspace or service.")
         if instance == profile["keychain_instance"]:
             raise ClientError("Reconnect preflight requires a fresh Keychain instance.")
-        _verify(project, profile, reviewed=True)
+        _verify(project, profile)
     keychain.check_ready()
     return {"ready": True, "coding_uid": expected_uid, "workspace": workspace,
             "changes_made": False, "credential_received": False,
@@ -714,7 +646,7 @@ def run(profile: Path, argv: list, keychain) -> int:
     with context._early_reads(project):
         loaded = _load_profile(profile)
     with context.decision(project, loaded['workspace'], loaded['url'], loaded['keychain_instance'], argv) as packet:
-        _verify(project, loaded, reviewed=True)
+        _verify(project, loaded)
         value = _token_text(keychain.get(loaded['keychain_instance'], 'agent'))
         if context._environment()!=packet['identity']['environment']:
             raise ClientError('Native environment changed before launch.')

@@ -1,6 +1,6 @@
 """Binding unit tests with a permissive approval fake, never native acceptance.
 
-The fake uses reviewed=True and never invokes the legacy logthis refusal. Real
+The fake uses the same binding helpers as production. Real
 approval and controlled-child environment checks live in test_installer_context.
 """
 
@@ -59,9 +59,9 @@ class ClientTests(unittest.TestCase):
             if Path(argv[0]).name != "claude":
                 context_authority._native(argv)
             if (project / client.PROFILE_NAME).exists():
-                client._verify(project, client._load_profile(project / client.PROFILE_NAME), reviewed=True)
+                client._verify(project, client._load_profile(project / client.PROFILE_NAME))
             else:
-                client._prepare_binding(project, workspace, url, instance, reviewed=True)
+                client._prepare_binding(project, workspace, url, instance)
             yield {'identity': {'environment': context_authority._environment(),
                                 'executable': {'path': argv[0]}, 'argv': argv}}
         # Same explicit legacy approval-boundary fixture: early metadata-only
@@ -547,13 +547,19 @@ class ClientTests(unittest.TestCase):
                 client.run(profile_path, ["claude"], self.keychain)
 
     def test_reviewed_guidance_uses_same_binding_validation_as_production(self):
-        with patch.object(client, '_check_logthis', side_effect=AssertionError('legacy guard')):
-            self.connect()
-            with (self.project / 'AGENTS.md').open('a') as handle:
-                handle.write('\nUse another logthis workflow.\n')
-            with patch.object(subprocess, 'Popen', return_value=type('Child', (), {
-                    'wait': lambda self: 0, 'poll': lambda self: 0})()):
-                self.assertEqual(client.run(self.project / client.PROFILE_NAME, ['claude'], self.keychain), 0)
+        self.connect()
+        with (self.project / 'AGENTS.md').open('a') as handle:
+            handle.write('\nUse another logthis workflow.\n')
+        with patch.object(subprocess, 'Popen', return_value=type('Child', (), {
+                'wait': lambda self: 0, 'poll': lambda self: 0})()):
+            self.assertEqual(client.run(self.project / client.PROFILE_NAME, ['claude'], self.keychain), 0)
+
+    def test_binding_helpers_have_no_unreachable_review_mode(self):
+        import inspect
+        for name in ('_check_logthis', '_instruction_roots', '_ROUTING'):
+            self.assertFalse(hasattr(client, name), name)
+        for name in ('_verify', '_prepare_binding', '_managed_parts', '_instructions', '_profile'):
+            self.assertNotIn('reviewed', inspect.signature(getattr(client, name)).parameters)
 
 
     def test_unmanaged_servers_cannot_reuse_credential_even_with_encoded_references(self):

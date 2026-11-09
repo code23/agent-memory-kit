@@ -523,29 +523,44 @@ UIDs and exact coding-UID match; root custody and account identities remain mock
 ### Mixed Claude Code account-state classification
 
 For `~/.claude.json`, `$CLAUDE_CONFIG_DIR/.claude.json` and the selected
-`<config>.json` sibling, the chosen design is **refusal**, rather than packet
-inclusion, for context-affecting keys. Their presence refuses even with an empty
-value. Unknown keys also refuse. `projects` is a structural container only:
-every project's entry must be an object with only the project inert keys below.
-Inert account/UI/metrics values are opaque and stay local: neither their text,
-values, project names nor a digest of their changing values enters the packet or
-registry. A fixed `inert-claude-state` / `keys/v1` marker records classification;
-normal startup-counter changes therefore do not invalidate approval. Full planned
+`<config>.json` sibling, non-empty context-affecting values refuse. The exact
+empty defaults admitted at either scope are `allowedTools`, `mcpContextUris`,
+`enabledMcpjsonServers`, `disabledMcpjsonServers`, `enabledMcpServers`,
+`disabledMcpServers`, `ignorePatterns` and `exampleFiles` as lists, and
+`mcpServers` as an object. Wrong types refuse. Acceptance flags
+`hasTrustDialogAccepted`, `hasTrustDialogHooksAccepted`,
+`hasClaudeMdExternalIncludesApproved`, `hasClaudeMdExternalIncludesWarningShown`
+and `bypassPermissionsModeAccepted` must be booleans. They are classified as
+acceptance bookkeeping, not context; changing a valid boolean does not change
+approval. Their values stay local.
+
+Unknown keys still refuse at the top level and in the selected project's entry.
+`projects` must be an object; only the entry whose key exactly matches the
+canonical selected project is classified. Other entries are not interpreted,
+used as context, or exported. Inert account/UI/metrics values remain opaque:
+neither their text, values, project names nor changing-value digests enter the
+packet or registry. The fixed `inert-claude-state` / `keys/v1` marker records
+successful classification, including the boolean type checks. Full planned
 metadata checks still catch concurrent state-file changes during observation.
 
-Sources: the official [settings files and precedence](https://code.claude.com/docs/en/settings)
-and its [settings reference](https://code.claude.com/docs/en/settings-reference),
-plus [MCP scopes, project approvals and server enablement](https://code.claude.com/docs/en/mcp),
-read on 9 November 2026. These describe loader scopes, account state, global
-configuration, MCP definitions and approvals; they do not publish a complete
-internal-state schema. The conservative inert inventory below was selected from
-**key names only** in the local `.claude.json` on that date. No local account
-values or per-project path names were printed, logged or stored. This is a
-maintained subset for 2.1.318/2.1.319, not general compatibility with every file
-Claude Code writes. Caches, trust flags and other unclassified fields may still
-refuse normal installations; never delete them or select a clean profile to bypass
-refusal. Documented context keys absent from the explicit refusal set still
-refuse through the unknown-key rule.
+Source: **structure-only inspection of a real local Claude Code 2.1.319
+`~/.claude.json`, 9 November 2026**: key names, nesting, types and empty/default
+forms only. No account values or project path keys were printed, logged or
+stored. The observed key sets are recorded below, separately from the supported
+allow-lists. `bypassPermissionsModeAccepted` was requested for compatibility;
+it was not present in this observation. The official
+[settings files and precedence](https://code.claude.com/docs/en/settings),
+[settings reference](https://code.claude.com/docs/en/settings-reference) and
+[MCP scopes and enablement](https://code.claude.com/docs/en/mcp) remain loader
+references, not a complete published internal-state schema.
+
+The fictional [state fixture](../tests/fixtures/claude-state-2.1.319.json)
+mirrors the observed supported project default/metrics structure, with invented
+account/metric values and another project's active configuration. A controlled
+Python-child test admits a second launch after native-shaped defaults and
+acceptance flags are saved. It does not prove native acceptance. The real local
+file also has active global configuration and unknown caches: those still
+refuse. Do not delete state or select a clean profile to bypass refusal.
 
 Top-level inert allow-list (`INERT_STATE_KEYS`):
 
@@ -569,7 +584,8 @@ Per-project inert allow-list (`INERT_PROJECT_STATE_KEYS`):
 `lastTotalCacheReadInputTokens`, `lastTotalInputTokens`, `lastTotalOutputTokens`, `lastTotalWebSearchRequests`
 `lastVersionBase`
 
-Explicit context refusal keys at either scope (`CONTEXT_STATE_KEYS`):
+Context-key inventory (`CONTEXT_STATE_KEYS`); only the exact empty defaults and
+boolean acceptance flags described above are exceptions:
 
 `additionalDirectories`, `allowedMcpServers`, `allowedTools`, `autoConnectIde`
 `autoInstallIdeExtension`, `autoMemoryDirectory`, `autoMemoryEnabled`, `autoUpdates`
@@ -586,6 +602,57 @@ classification: models/limited permissions/disabled auto-memory are reviewed;
 other settings, hooks, plugins, environment sources, imports, managed preferences,
 remote caches and unsupported sources refuse. This repair adds no context-source
 bypass and never reads native credentials to classify them.
+
+Observed top-level key set (names only; presence does not imply support):
+
+`additionalModelCostsCache`, `additionalModelOptionsAnsweredAt`, `additionalModelOptionsCache`, `agentPushNotifEnabled`, `announcementImpressions`
+`anonymousId`, `apiCreditLinkStatusCache`, `autoCompactWindowsCache`, `autoModeEnvSetup`, `autoPermissionsNotificationCount`
+`autoUpdates`, `autoUpdatesProtectedForNative`, `birthdayHatAnimationCount`, `btwUseCount`, `cachedArtifactRoster`
+`cachedChromeExtensionInstalled`, `cachedDynamicConfigs`, `cachedExperimentData`, `cachedExperimentFeatures`, `cachedExtraUsageDisabledReason`
+`cachedGrowthBookFeatures`, `cachedGrowthBookFeaturesAt`, `cachedStatsigGates`, `cachedUsageUtilization`, `changelogLastFetched`
+`chromeExtension`, `claudeAiMcpEverConnected`, `claudeCodeFirstTokenDate`, `claudeInChromeDefaultEnabled`, `clientDataCacheSlots`
+`closedIssuesLastChecked`, `deepLinkTerminal`, `diffSidebarOpen`, `effortCalloutDismissed`, `effortCalloutV2Dismissed`
+`fableOverageConsentV2`, `fallbackAvailableWarningThreshold`, `feedbackSurveyState`, `firstStartTime`, `fullscreenUpsellSeenCount`
+`githubRepoPaths`, `githubWebConnectionStatusCache`, `groveChoiceSeenAt`, `groveConfigCache`, `hasAvailableSubscription`
+`hasCompletedClaudeInChromeOnboarding`, `hasCompletedOnboarding`, `hasIdeOnboardingBeenShown`, `hasOpusPlanDefault`, `hasRemoteEnvironment`
+`hasResetAutoModeOptInForDefaultOffer`, `hasSeenAutoDefaultNudge`, `hasSeenAutoModeEntryWarning`, `hasSeenAutoModeOutsideReadPrompt`, `hasSeenEffortMediumNudgeByModel`
+`hasSeenStashHint`, `hasSeenTasksHint`, `hasShownOpus45Notice`, `hasShownOpus46Notice`, `hasUsedBackslashReturn`
+`hasUsedRemoteControl`, `hasUsedStash`, `hasVisitedPasses`, `ideHintShownCount`, `installMethod`
+`isQualifiedForDataSharing`, `lastClawdEntranceVersion`, `lastOnboardingVersion`, `lastPlanModeUse`, `lastReleaseNotesSeen`
+`lastShownEmergencyTip`, `lspRecommendationIgnoredCount`, `machineID`, `mcpNeedsAuthNoticed`, `mcpServers`
+`migrationVersion`, `modelAccessCache`, `numStartups`, `oauthAccount`, `officialMarketplaceAutoInstallAttempted`
+`officialMarketplaceAutoInstalled`, `opus45MigrationComplete`, `opus46FeedSeenCount`, `opusProMigrationComplete`, `orgModelDefaultCache`
+`overageCreditGrantCache`, `passesEligibilityCache`, `passesLastSeenRemaining`, `passesUpsellSeenCount`, `penguinModeOrgEnabled`
+`pluginUsage`, `pluginUsageLspGraceAppliedIds`, `projects`, `promoStartupSeenCount`, `promptQueueUseCount`
+`rcLongTurnNudgeSeenCount`, `rcLongTurnNudgeSeenKey`, `recommendedSubscription`, `remoteControlMachineId`, `remoteControlReadyPushCount`
+`remoteControlReadyPushKey`, `remoteControlSurfacesSeen`, `remoteDialogSeen`, `replBridgePlaceholders`, `resumeReturnDismissed`
+`s1mAccessCache`, `seenNotifications`, `shiftEnterKeyBindingInstalled`, `showSpinnerTree`, `skillUsage`
+`slackAppInstallCount`, `sonnet1m45MigrationComplete`, `sonnet45MigrationComplete`, `sonnet45MigrationTimestamp`, `subscriptionNoticeCount`
+`thinkingMigrationComplete`, `tipLifetimeShownCounts`, `tipsHistory`, `tipsHistoryByCommand`, `toolUsage`
+`transcriptShareDismissed`, `unpinFable5LaunchEffort`, `unpinOpus47LaunchEffort`, `unpinOpus48LaunchEffort`, `userID`
+`voiceFooterHintSeenCount`
+
+Observed per-project entry key union (names only; project path keys omitted):
+
+`allowedTools`, `disabledMcpServers`, `disabledMcpjsonServers`, `enabledMcpServers`, `enabledMcpjsonServers`
+`exampleFiles`, `exampleFilesGeneratedAt`, `hasClaudeMdExternalIncludesApproved`, `hasClaudeMdExternalIncludesWarningShown`, `hasTrustDialogAccepted`
+`hasTrustDialogHooksAccepted`, `hasUnseenTeamArtifacts`, `ignorePatterns`, `lastAPIDuration`, `lastAPIDurationWithoutRetries`
+`lastCost`, `lastDuration`, `lastFpsAverage`, `lastFpsLow1Pct`, `lastGracefulShutdown`
+`lastHintSessionId`, `lastLinesAdded`, `lastLinesRemoved`, `lastModelUsage`, `lastSessionFirstPrompt`
+`lastSessionId`, `lastSessionMetrics`, `lastSessionModified`, `lastStartTime`, `lastToolDuration`
+`lastTotalCacheCreationInputTokens`, `lastTotalCacheReadInputTokens`, `lastTotalInputTokens`, `lastTotalOutputTokens`, `lastTotalWebSearchRequests`
+`lastVersionBase`, `loggedAuthoredArtifactPaths`, `mcpContextUris`, `mcpServers`, `reactVulnerabilityCache`
+`remoteControlSpawnMode`
+
+Native executable custody also checks the opened executable and its opened
+parent with the existing descriptor-based macOS ACL checker. This adds no
+immutable-filesystem or later native-consumption claim. Host install and daemon
+validate root custody before entering startup cleanup. Cleanup requires a PID
+file and the existing owned-cluster status verification, stops with `check=False`,
+and preserves startup errors and signal-handler restoration. A stop requested
+during PostgreSQL startup returns before spawning the server. Missing registry
+metadata has a bootstrap-specific refusal; unreadable metadata retains the mode
+repair diagnostic. Unreachable legacy binding review modes have been removed.
 
 ### Cost and credential exposure
 
