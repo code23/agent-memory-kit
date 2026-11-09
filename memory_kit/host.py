@@ -529,8 +529,10 @@ def install(preflight, keychain=None):
             _bootstrap(config, values)
             config["phase"] = "installed"
             _save_config(root / "config.json", config, uid)
-        finally:
+        except BaseException:
             _cleanup_pg(config)
+            raise
+        _stop_owned_pg(config)
         return {"installed": True, "workspace": config["workspace"], "data_preserved": True}
     finally:
         os.close(lock_fd)

@@ -145,8 +145,12 @@ BOOLEAN_STATE_KEYS = frozenset({
 })
 
 
-def _classify_state(value, project):
-    """Fail closed at each loader scope; inert account/metrics values stay local."""
+def _classify_state(value):
+    """Fail closed at each loader scope; inert account/metrics values stay local.
+
+    Every project entry is classified, not only the launch folder's: Claude Code keys
+    project state by the git root (or folder) it resolves, so an ancestor or
+    differently-cased key can carry context for this launch."""
     def check_keys(mapping, allowed):
         if not isinstance(mapping, dict): fail('Malformed Claude Code state scope.')
         for key in set(mapping) & EMPTY_STATE_KEYS.keys():
@@ -163,8 +167,8 @@ def _classify_state(value, project):
     check_keys(value, INERT_STATE_KEYS | {'projects'})
     projects = value.get('projects', {})
     if not isinstance(projects, dict): fail('Malformed Claude Code project state.')
-    if str(project) in projects:
-        check_keys(projects[str(project)], INERT_PROJECT_STATE_KEYS)
+    for entry in projects.values():
+        check_keys(entry, INERT_PROJECT_STATE_KEYS)
     return dict(INERT_STATE)
 
 
@@ -308,7 +312,7 @@ def _classified(path, kind='markdown', project=None):
         if 'model' in value and not isinstance(value['model'],str):fail('Invalid native model setting.')
         if 'permissions' in value and value['permissions'] not in ({},{'defaultMode':'bypassPermissions'}):fail('Unsupported permission settings mechanism.')
     elif kind=='state':
-        return _classify_state(parse(text), project)
+        return _classify_state(parse(text))
     elif kind=='empty':
         if parse(text)!={}:fail('Nonempty managed policy/global configuration is unsupported.')
     elif kind=='mcp':

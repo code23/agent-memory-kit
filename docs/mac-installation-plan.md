@@ -534,10 +534,14 @@ and `bypassPermissionsModeAccepted` must be booleans. They are classified as
 acceptance bookkeeping, not context; changing a valid boolean does not change
 approval. Their values stay local.
 
-Unknown keys still refuse at the top level and in the selected project's entry.
-`projects` must be an object; only the entry whose key exactly matches the
-canonical selected project is classified. Other entries are not interpreted,
-used as context, or exported. Inert account/UI/metrics values remain opaque:
+Unknown keys still refuse at the top level and in every project entry.
+`projects` must be an object and every entry is classified, not only the one
+whose key matches the launch folder: Claude Code keys project state by the git
+root (or folder) it resolves, so an ancestor or differently-cased key can carry
+context for a launch (9 Nov 2026 review; an earlier selected-entry-only check
+failed open and was withdrawn). A machine with an old project that still holds
+non-empty MCP servers, tools or unknown keys is therefore refused until that
+entry is cleared. Entries are never used as context or exported. Inert account/UI/metrics values remain opaque:
 neither their text, values, project names nor changing-value digests enter the
 packet or registry. The fixed `inert-claude-state` / `keys/v1` marker records
 successful classification, including the boolean type checks. Full planned

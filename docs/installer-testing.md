@@ -286,8 +286,9 @@ acceptance remain open.
 
 ## Whole-candidate repair checks, 9 November 2026
 
-The client binding fixture now uses `reviewed=True`, never `_check_logthis`,
-and is intentionally more permissive than production approval. Ten obsolete
+The client binding fixture is intentionally more permissive than production
+approval. (A later repair the same day removed the `reviewed` mode and
+`_check_logthis` entirely; every caller now uses the reviewed path.) Ten obsolete
 legacy capture/global-context refusal cases were retired: they claimed behavior
 that the supported reviewed path never supplied. The retained no-body-read cases
 explicitly test missing-native-argv refusal only. Supported export reads accepted

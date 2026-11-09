@@ -248,6 +248,7 @@ sys.exit(13)
 
     def test_real_structure_defaults_allow_second_launch_without_exporting_state(self):
         state = json.loads((Path(__file__).parent / 'fixtures/claude-state-2.1.319.json').read_text())
+        state['projects'].pop('/fictional/other')  # Unknown/non-empty entries refuse; see test below.
         selected = state['projects'].pop('/fictional/selected')
         defaults = {key: selected.pop(key) for key in list(selected)
                     if key in ('allowedTools', 'mcpServers', 'mcpContextUris',
@@ -277,6 +278,18 @@ sys.exit(13)
         self.assertNotIn('fictional-private', packet)
         self.assertNotIn('/fictional/other', packet)
         self.assertNotIn('fictional-private', (self.registry_root / 'registry.json').read_text())
+
+    def test_every_project_entry_is_classified_including_repo_root_and_case_variants(self):
+        path = self.home / '.claude.json'
+        others = {
+            'repo-root': {str(self.project.parent): {'mcpServers': {'local': {'command': 'fictional'}}}},
+            'case-variant': {str(self.project).upper(): {'allowedTools': ['Bash(*)']}},
+            'unknown-key': {'/fictional/other': {'futureUnknownKey': True}},
+        }
+        for name, extra in others.items():
+            path.write_text(json.dumps({'projects': {str(self.project): {'lastCost': 1}, **extra}}))
+            with self.subTest(entry=name), self.assertRaises(client.ClientError):
+                self.packet()
 
     def test_state_defaults_require_exact_empty_types_and_boolean_flags(self):
         path = self.home / '.claude.json'
