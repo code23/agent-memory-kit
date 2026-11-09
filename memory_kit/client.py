@@ -715,7 +715,8 @@ def run(profile: Path, argv: list, keychain) -> int:
     _check_lock(project)
     with context._early_reads(project):
         loaded = _load_profile(profile)
-        if not argv or Path(argv[0]).name not in ('claude','2.1.318'):
+        if not argv or (Path(argv[0]).name != 'claude'
+                        and 'claude-code/'+Path(argv[0]).name not in context.SUPPORTED_CONTRACTS):
             _check_logthis(project)
     with context.decision(project, loaded['workspace'], loaded['url'], loaded['keychain_instance'], argv) as packet:
         _verify(project, loaded, reviewed=True)

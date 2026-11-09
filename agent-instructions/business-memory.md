@@ -3,8 +3,11 @@
 The client installer requires Python 3.11 or later and uses the standard library
 TOML parser to validate existing Codex configuration without rewriting it.
 
-The current launch-context candidate supports the conservative exact local
-`claude-code/2.1.318` contract. See the authoritative
+The current launch-context candidate supports exactly the local contracts
+`claude-code/2.1.318` and `claude-code/2.1.319`: **2.1.319 observer candidate**.
+2.1.318 is retained only for compatibility, not recommended; 2.1.319 includes
+security fixes. Qualification is changelog/string-comparison triage, not proof
+of native loading or coverage. Rollout remains **NO GO**. See the authoritative
 [subset, authority and limits](../docs/mac-installation-plan.md#local-observer-candidate-and-limits).
 Fixed protected authority/software setup and real native/two-account acceptance
 remain unrun. Other clients, unknown local mechanisms and unsupported settings

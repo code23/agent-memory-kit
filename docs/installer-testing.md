@@ -77,9 +77,34 @@ The initial implementation has native component evidence, not a completed two-ac
 
 ## Launch-context candidate qualification
 
+**2.1.319 observer candidate (9 November):** the two explicit contracts are
+`claude-code/2.1.318` and `claude-code/2.1.319`, selected only when the resolved
+`versions/<version>` path and embedded VERSION marker agree. Unknown versions
+refuse. Packets and approval are bound to the actual contract, executable version
+and SHA-256; executable changes require fresh review. SHA-256 binds reviewed
+bytes, not vendor authenticity.
+
+Qualification rests on changelog review and binary string comparison: triage,
+not proof of identical loading behaviour. The review observes specific discovery
+slots; coverage remains unproven. The guarantee remains reviewed local observations
+during the authorization lookup, without an immutable-filesystem claim. 2.1.319
+contains security fixes for a Bash permission bypass and a sandbox escape;
+2.1.318 is retained only for compatibility, not recommended. Managed settings
+`requiredMinimumVersion`/`requiredMaximumVersion` are future version-control work
+because the observer currently refuses nonempty managed policy. Overall rollout
+remains **NO GO**; the version-matched native rehearsal gate is unchanged.
+
+9 November offline checks: `./run-tests.sh` passed all 15 stages before and after;
+`pytest tests` passed 178 tests before and 183 after. Five added tests and an
+expanded resolver test cover contract selection, both path/marker mismatches,
+unknown releases, packet/approval identity drift and the shared argv allowlist.
+Static identity checks matched both supplied binary hashes without executing
+either client. These checks do not establish native loading or client readiness;
+no independent review ran for this slice.
+
 The narrower local-observation contract is approved. The invented-client attempt
 remains stopped; the implemented fixture exercises the real
-`claude-code/2.1.318` contract with explicit native identity/source-root/UID/custody
+observer contracts with explicit native identity/source-root/UID/custody
 mocks. The fixed remote/native-time exclusions appear in both packet and approval:
 remote policy fetch, runtime MCP instructions, hook output, auto-update and remote
 plugin marketplaces. Local files are inventoried or cause conservative refusal.

@@ -7,6 +7,12 @@ pending native acceptance. Accepted historical core evidence and the existing
 internal pilot are unchanged; live pilot health was not rechecked. Original
 programme start of 5 November at 13:20 is retained; product repair count is now 16.
 
+**2.1.319 observer candidate, 9 November.** The explicit local observer contracts
+are `claude-code/2.1.318` and `claude-code/2.1.319`. This adds a candidate, not
+native acceptance. The protected rollout remains **NO GO** and the version-matched
+native guarded-lifecycle rehearsal gate is unchanged. See the
+[qualification and limits](#local-observer-candidate-and-limits).
+
 **Observation hardening, 8 November (offline only).** The three confirmed
 observation defects below are now closed in `memory_kit/context_authority.py` by
 one shared correction: presence and identity come from the planned metadata
@@ -69,8 +75,8 @@ The three cases, as confirmed before the hardening (each now refuses offline):
 Fresh Node 24 v24.22.2 version and packaged integrity checks pass. Earlier missing
 Homebrew-library failures are historical; recovery occurred outside this task,
 with no host action here. Earlier Node 22 v22.16.0 integrity PASS does not meet the
-installer's required major 24. Default Claude Code is 2.1.319 while this observer
-contract is 2.1.318: native guarded-lifecycle acceptance remains unqualified.
+installer's required major 24. Default Claude Code 2.1.319 now has an explicit
+observer candidate: native guarded-lifecycle acceptance remains unqualified.
 
 Local test
 passes and witnesses use fictional inputs; native identity/UID/custody/TTY mocks
@@ -88,7 +94,7 @@ this section is the authoritative current go/no-go disposition.
 | Discovery | Preference omission, project identity and qualified collector ABA witnesses now refuse; 5 regressions RED then GREEN; Claude review ACCEPT WITH LOW FINDINGS | Fixed offline (fictional fixtures, native identity mocked) | Native guarded lifecycle; unchanged fresh-stat refusal checks remain unqualified |
 | Revoke/registry | Prior scoped Claude PASS; accepted bytes unchanged | Scoped acceptance retained | Not whole-guard acceptance |
 | Node 24 | Fresh v24.22.2 and packaged integrity PASS | Required runtime available | No host/install acceptance inferred |
-| Current client | Default 2.1.319; contract 2.1.318 | UNQUALIFIED mismatch | Version-matched actual guarded lifecycle |
+| Current client | Default 2.1.319; explicit contract 2.1.319, with 2.1.318 compatibility | 2.1.319 observer candidate; no native acceptance | Version-matched actual guarded lifecycle |
 | Host/two-UID/Keychain | No new native acceptance | OPEN | Protected bootstrap, custody and transfer |
 | Pre-import/coverage/meaning | Source-only loader, envelope coverage, token/rollback and native meaning/loading unresolved | OPEN | Scoped implementation/verification as authorised |
 | Existing pilot | No changes; health not rechecked | Historical only | No live health assertion |
@@ -286,8 +292,8 @@ the evidence. Final independent code review remains required.
 
 ### Local observer candidate and limits
 
-The invented-client attempt was stopped and removed. The implemented contract is
-`claude-code/2.1.318`, based on the official
+The invented-client attempt was stopped and removed. The implemented contracts are
+exactly `claude-code/2.1.318` and `claude-code/2.1.319`, based on the official
 [memory](https://code.claude.com/docs/en/memory),
 [settings](https://code.claude.com/docs/en/settings),
 [managed policy](https://code.claude.com/docs/en/managed-settings),
@@ -295,7 +301,23 @@ The invented-client attempt was stopped and removed. The implemented contract is
 [CLI](https://code.claude.com/docs/en/cli-reference) documentation plus bounded
 shipped release metadata inspection. Native binary identity binds resolved path,
 embedded release metadata and observed SHA-256; it is not custody or authenticity
-attestation. No invented executable protocol is exposed.
+attestation. SHA-256 binds reviewed bytes, not vendor authenticity. No invented
+executable protocol is exposed. The resolved `versions/<version>` path name and
+embedded VERSION marker must agree; unknown versions refuse without fallback.
+Packets record the actual selected contract. Packet validation and authorization
+refuse a changed contract, executable version, resolved path or SHA-256; approval
+under one binary does not survive an executable change.
+
+**2.1.319 observer candidate:** qualification rests on changelog review and binary
+string comparison. This is triage, not proof of identical loading behaviour.
+The review observes specific discovery slots; coverage remains unproven. The
+guarantee remains **reviewed local observations during the authorization lookup**,
+without an immutable-filesystem claim or proof of later native consumption.
+2.1.319 contains security fixes for a Bash permission bypass and a sandbox escape;
+2.1.318 is retained only for compatibility, not recommended. Version control via
+`requiredMinimumVersion`/`requiredMaximumVersion` managed settings is future work
+because the observer currently refuses nonempty managed policy. The existing
+version-matched native rehearsal remains required and unrun for this candidate.
 
 The prototype observes its enumerated system/user instructions, managed
 settings/drop-ins and preference paths, selected native configuration, governing

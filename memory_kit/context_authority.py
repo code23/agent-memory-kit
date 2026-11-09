@@ -17,7 +17,7 @@ import time
 from . import security
 
 DISCOVERY = Path('/Library/Application Support/Agent Memory Kit/Context Authority')
-SUPPORTED_CONTRACTS = frozenset({'claude-code/2.1.318'})
+SUPPORTED_CONTRACTS = frozenset({'claude-code/2.1.318', 'claude-code/2.1.319'})
 MAX_PACKET = 4 * 1024 * 1024
 
 
@@ -86,7 +86,6 @@ def authority(coding_uid=None):
         yield directory, uid, digest(canonical(observed))
 
 
-CONTRACT = 'claude-code/2.1.318'
 EXCLUDED = ('remote policy fetch', 'runtime MCP instructions', 'hook output',
             'auto-update', 'remote plugin marketplaces')
 SETTINGS = {'model', 'permissions', 'autoMemoryEnabled'}
@@ -123,8 +122,8 @@ def _native(argv):
     if not selected:
         fail('Claude executable is unavailable.')
     path = Path(selected).resolve(strict=True)
-    if path.name != '2.1.318' or path.parent.name != 'versions':
-        fail('Only the Claude Code native 2.1.318 release layout is supported.')
+    if 'claude-code/'+path.name not in SUPPORTED_CONTRACTS or path.parent.name != 'versions':
+        fail('Unsupported Claude Code native release layout; only versions/2.1.318 and versions/2.1.319 are supported.')
     from .client import _directory
     with _directory(path.parent) as fd:
         opened = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
@@ -137,7 +136,7 @@ def _native(argv):
             if magic not in (b'\xcf\xfa\xed\xfe',b'\xca\xfe\xba\xbe'):
                 fail('Unsupported native executable format.')
             h.update(magic)
-            marker=b'README_URL:"https://code.claude.com/docs/en/overview",VERSION:"2.1.318"'
+            marker=f'README_URL:"https://code.claude.com/docs/en/overview",VERSION:"{path.name}"'.encode()
             release_seen=False;tail=b''
             while True:
                 chunk=os.read(opened,1024*1024)
@@ -145,13 +144,13 @@ def _native(argv):
                 h.update(chunk)
                 release_seen=release_seen or marker in tail+chunk
                 tail=chunk[-len(marker):]
-            if not release_seen:fail('Native embedded release metadata does not match2.1.318.')
+            if not release_seen:fail(f'Native embedded release metadata does not match {path.name}.')
             after=os.fstat(opened)
             named=os.stat(path.name,dir_fd=fd,follow_symlinks=False)
             if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns) or (before.st_dev,before.st_ino)!=(named.st_dev,named.st_ino):
                 fail('Native executable changed while observed.')
         finally:os.close(opened)
-    return {'path':str(path),'version':'2.1.318','sha256':h.hexdigest()}
+    return {'path':str(path),'version':path.name,'sha256':h.hexdigest()}
 
 
 def _environment():
@@ -586,7 +585,7 @@ def observe(project, workspace, url, instance, argv, software_digest):
             if str(project/name) not in current:current[str(project/name)]=_classified(project/name)
         _check_plan(metadata)
         info=metadata['paths'][str(project)][0]
-        return {'version':1,'contract':CONTRACT,'excluded':list(EXCLUDED),
+        return {'version':1,'contract':'claude-code/'+native['version'],'excluded':list(EXCLUDED),
                 'identity':{'coding_uid':os.getuid(),'project':str(project),'device':info[0],'inode':info[1],
                             'workspace':workspace,'url':url,'argv':argv,'environment':environment,
                             'software':software_digest,'executable':native},
@@ -611,6 +610,10 @@ def validate_packet(packet):
         fail('Invalid native context review packet.')
     if any(key not in {'HOME','CLAUDE_CONFIG_DIR','CODEX_HOME','PATH','ANTHROPIC_MODEL','ANTHROPIC_DEFAULT_MODEL','ANTHROPIC_DEFAULT_OPUS_MODEL','ANTHROPIC_DEFAULT_SONNET_MODEL','ANTHROPIC_DEFAULT_HAIKU_MODEL'} or not isinstance(value,str) for key,value in packet['identity']['environment'].items()):
         fail('Review packet contains unclassified environment or credentials.')
+    native = _native(packet['identity']['argv'])
+    if (packet['identity']['executable'] != native
+            or packet['contract'] != 'claude-code/'+native['version']):
+        fail('Native executable or observer contract changed; export and review a fresh packet.')
     _arguments(packet['identity']['argv'])
     # Operator hashes exactly the escaped UTF-8 bytes it displays, including
     # prospective managed sources. No body survives into the public registry.
@@ -757,7 +760,7 @@ def decision(project, workspace, url, instance, argv):
             approved = None if current['approval'] is None else current['approval']['packet']
             if (approved is None or set(approved) != set(seen)
                     or approved['identity'] != seen['identity']
-                    or approved['contract'] not in SUPPORTED_CONTRACTS or approved['version'] != 1
+                    or approved['contract'] != seen['contract'] or approved['version'] != 1
                     or approved['excluded'] != list(EXCLUDED)
                     or seen['current'] not in (approved['current'], approved['prospective'])
                     or seen['prospective'] != approved['prospective']):

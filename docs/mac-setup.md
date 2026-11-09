@@ -91,7 +91,11 @@ After a Python package update, inspect `autostart_python_missing` in `status` an
 ## Bind the coding project
 
 The launch-context approval decision is complete. The current candidate supports
-only the conservative `claude-code/2.1.318` local observer described in the
+exactly `claude-code/2.1.318` and `claude-code/2.1.319`: **2.1.319 observer candidate**.
+2.1.318 is retained only for compatibility, not recommended; 2.1.319 includes
+security fixes. Changelog review and binary string comparison are triage, not
+proof of identical loading behaviour; discovery coverage remains unproven.
+Rollout remains **NO GO** with the native rehearsal gate unchanged. See the
 [installation plan](mac-installation-plan.md#local-observer-candidate-and-limits).
 Host bootstrap of the fixed root-owned Context Authority and delegated protected
 software is a separate, unrun gate. Existing service installation does not create

@@ -66,6 +66,7 @@ sys.exit(13)
 ''')
         self.binary.chmod(0o700)  # New isolated fixture executable only.
         self.argv=[str(self.binary),'--model','fixture-worker','--dangerously-skip-permissions']
+        self.native_version='2.1.318'
         self.env={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'HOME':str(self.home),
                   'CLAUDE_CONFIG_DIR':str(self.config),'ANTHROPIC_AUTH_TOKEN':'fictional-native-auth'}
         self.enterContext(patch.dict(os.environ,self.env,clear=True))
@@ -74,7 +75,7 @@ sys.exit(13)
         self.enterContext(patch.object(c,'_scope_roots',return_value=(self.project,self.ancestor)))
         def native(argv):
             if not isinstance(argv,list) or not argv:raise client.ClientError('missing argv')
-            return {'path':str(self.binary),'version':'2.1.318','sha256':c.digest(self.binary.read_bytes())}
+            return {'path':str(self.binary),'version':self.native_version,'sha256':c.digest(self.binary.read_bytes())}
         self.enterContext(patch.object(c,'_native',side_effect=native))
         @contextmanager
         def authority(coding_uid=None):
@@ -140,6 +141,57 @@ sys.exit(13)
         self.denied(self.launch)
         self.assertNotIn('fictional-native-auth',(self.registry_root/'registry.json').read_text())
         print('ACCEPTED_SYNTHETIC_LOCAL_WORKFLOW: export -> canonicalTTYapprove -> readonlypreflight -> connect -> boundconnect -> actualPythonchild13/models/auth/dispatch -> rotate/reconnect -> child13 -> changedlocalDENY beforeeffects -> packetFreeREVOKE -> DENY; native identity/roots/UID/custody MOCKED',flush=True)
+
+    def test_21319_packet_selects_observed_contract(self):
+        self.native_version='2.1.319'
+        packet=self.packet()
+        self.assertEqual(packet['contract'],'claude-code/2.1.319')
+        self.assertEqual(c.validate_packet(packet),c.hashes(packet))
+        self.approve()
+        self.assertTrue(self.preflight()['ready'])
+
+    def test_packet_contract_version_and_sha_must_match_current_executable(self):
+        packet=self.packet()
+        for field,value in (('contract','claude-code/2.1.319'),
+                            ('version','2.1.319'),('sha256','0'*64)):
+            forged=copy.deepcopy(packet)
+            if field=='contract':forged[field]=value
+            else:forged['identity']['executable'][field]=value
+            with self.subTest(field=field),self.assertRaises(client.ClientError):
+                c.validate_packet(forged)
+        self.approve()
+        registry=json.loads((self.registry_root/'registry.json').read_text())
+        registry['approval']['packet']['contract']='claude-code/2.1.319'
+        (self.registry_root/'registry.json').write_bytes(c.canonical(registry))
+        self.denied(self.preflight)
+
+    def test_approval_refuses_resolved_release_and_sha_changes(self):
+        versions=self.base/'versions';versions.mkdir()
+        for version in ('2.1.318','2.1.319'):
+            (versions/version).write_bytes(b'\xcf\xfa\xed\xfe'+
+                f'README_URL:"https://code.claude.com/docs/en/overview",VERSION:"{version}"'.encode())
+            (versions/version).chmod(0o700)  # New isolated fixture only.
+        self.binary.unlink();self.binary.symlink_to(versions/'2.1.318')
+        with patch.object(c,'_native',side_effect=REAL_NATIVE):
+            packet=self.packet()
+            self.approve()
+            self.assertTrue(self.preflight()['ready'])
+            self.binary.unlink();self.binary.symlink_to(versions/'2.1.319')
+            with self.assertRaises(client.ClientError):c.validate_packet(packet)
+            self.denied(self.connect)
+            self.binary.unlink();self.binary.symlink_to(versions/'2.1.318')
+            with (versions/'2.1.318').open('ab') as binary:binary.write(b'changed bytes')
+            with self.assertRaises(client.ClientError):c.validate_packet(packet)
+            self.denied(self.connect)
+
+    def test_run_argv_names_use_explicit_contracts_before_authorisation(self):
+        self.approve();self.connect()
+        for name in ('claude','2.1.318','2.1.319','2.1.317','2.1.320'):
+            with self.subTest(name=name),patch.object(client,'_check_logthis') as early, \
+                    patch.object(c,'decision',side_effect=client.ClientError('fixture stop')):
+                with self.assertRaisesRegex(client.ClientError,'fixture stop'):
+                    client.run(self.project/client.PROFILE_NAME,[str(self.base/name)],self.store)
+                self.assertEqual(early.call_count,0 if name in ('claude','2.1.318','2.1.319') else 1)
 
     @contextmanager
     def foreign_memory_guard(self, projects):
@@ -802,16 +854,34 @@ class PublicSourceRaceTests(unittest.TestCase):
             finally:os.close(fd)
 
     def test_native_release_resolver_observes_embedded_version_and_drift(self):
+        self.assertEqual(c.SUPPORTED_CONTRACTS,
+                         frozenset({'claude-code/2.1.318','claude-code/2.1.319'}))
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary).resolve();versions=root/'versions';versions.mkdir()
-            binary=versions/'2.1.318'
-            marker=b'README_URL:"https://code.claude.com/docs/en/overview",VERSION:"2.1.318"'
-            binary.write_bytes(b'\xcf\xfa\xed\xfe'+marker);binary.chmod(0o700)
-            result=REAL_NATIVE([str(binary),'--model','fixture'])
-            self.assertEqual(result['version'],'2.1.318')
-            self.assertEqual(result['sha256'],c.digest(binary.read_bytes()))
-            binary.write_bytes(b'\xcf\xfa\xed\xfe'+marker.replace(b'2.1.318',b'2.1.319'))
-            with self.assertRaises(client.ClientError):REAL_NATIVE([str(binary)])
+            for version in ('2.1.318','2.1.319'):
+                with self.subTest(version=version):
+                    binary=versions/version
+                    marker=f'README_URL:"https://code.claude.com/docs/en/overview",VERSION:"{version}"'.encode()
+                    binary.write_bytes(b'\xcf\xfa\xed\xfe'+marker)
+                    binary.chmod(0o700)  # New isolated fixture only.
+                    result=REAL_NATIVE([str(binary),'--model','fixture'])
+                    self.assertEqual(result['version'],version)
+                    self.assertEqual(result['sha256'],c.digest(binary.read_bytes()))
+                    other='2.1.319' if version=='2.1.318' else '2.1.318'
+                    binary.write_bytes(b'\xcf\xfa\xed\xfe'+marker.replace(version.encode(),other.encode()))
+                    with self.assertRaisesRegex(client.ClientError,'embedded release'):
+                        REAL_NATIVE([str(binary)])
+
+    def test_native_unknown_versions_have_no_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            versions=Path(temporary).resolve()/'versions';versions.mkdir()
+            for version in ('2.1.317','2.1.320'):
+                binary=versions/version
+                binary.write_bytes(b'\xcf\xfa\xed\xfe'+
+                    f'README_URL:"https://code.claude.com/docs/en/overview",VERSION:"{version}"'.encode())
+                binary.chmod(0o700)  # New isolated fixture only.
+                with self.subTest(version=version),self.assertRaisesRegex(client.ClientError,'supported'):
+                    REAL_NATIVE([str(binary)])
 
 
 if __name__=="__main__":unittest.main()
