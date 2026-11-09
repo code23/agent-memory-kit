@@ -849,7 +849,7 @@ def main():
                 "cap-rt-row-forbid-0-bbbb0003.yaml",
                 {
                     **base,
-                    "fact": "Email user@example.com must never retriage to judges.",
+                    "fact": "API key sk-abcdefghij must never retriage to judges.",
                     "source": {
                         "kind": "note",
                         "path": str(source_note),

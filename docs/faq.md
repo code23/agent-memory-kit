@@ -60,11 +60,15 @@ also valid: a person writes the fact and commits it.
 
 ## 8. What about GDPR and client data?
 
-The design helps, but it does not make you compliant on its own. Keep personal data out of
-memory: the checks match emails, phone numbers and money figures with regular expressions,
-and the instructions tell agents never to propose personal data or transcripts. Those
-patterns are a safety net, not a guarantee, and they will miss personal data in formats
-they do not know. Store how you work with a client, not the client's records. Keep one
+Client fees, quotes, job values and payment terms can be shared in team memory. Private
+finance, including salary, payroll, dividends and tax affairs, stays out.
+
+Business email addresses and phone numbers remain unmasked (James, 9 November 2026).
+They are legitimate team knowledge, and Cockpit uses email addresses to link facts to CRM
+contacts. Its council judges flag personal contacts; personal/family rules and private
+finance deny defaults still apply. Agents must not propose personal/family material or
+raw transcripts. API keys, IPv4 addresses, repository URLs, environment
+exports and ports remain masked. The design helps, but does not ensure compliance. Keep one
 scope per client so access can be limited. Check where your judge and extractor models
 process data, because redacted notes, facts, excerpts and target-note text are sent to them.
 

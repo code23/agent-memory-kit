@@ -12,6 +12,7 @@ python3 funnel/tests/test_batched_judges.py
 python3 funnel/tests/test_deadlock_policy.py
 python3 funnel/tests/test_retriage_batches.py
 python3 funnel/tests/test_exact_duplicate_gate.py
+python3 funnel/tests/test_team_money.py
 python3 funnel/tests/test_private_team_boundary.py
 python3 funnel/tests/test_quoted_judgment.py
 python3 funnel/tests/test_triage_cron.py
@@ -28,7 +29,7 @@ python3 funnel/tests/test_doctor.py
 |------|------|--------|
 | Safe target paths | `memory.py` | relative `.md` under the vault is accepted; absolute, `..`, `~` and non-Markdown paths are rejected |
 | Safe append | `memory.py` | a directory swapped for a symlink between check and write is refused |
-| Secret redaction | `memory.py`, `capture.py` | emails and API key shapes become `[REDACTED:kind]`; clean text is unchanged |
+| Secret redaction | `memory.py`, `capture.py`, `test_team_money.py` | named key, IP, repo, environment, port, card and UK account masks; business contacts and client prices unchanged |
 | Source verification | `memory.py` | `verified`, `changed`, `missing`, `unreadable`; fail closed, so missing is never verified |
 | Review envelopes | `memory.py` | round trip, reason codes, judge verdicts, hashes |
 | Scope registry | `memory.py`, `capture.py` | aliases, destinations, unknown scopes park |
@@ -50,6 +51,11 @@ python3 funnel/tests/test_doctor.py
 | Judge command | `test_judge_adapter.py` | strict replies: bare JSON or one code fence accepted; prose, several objects or a quoted vote refused; request shape per provider (key in a header, never the URL); missing key fails before any call; HTTP and network errors never show the response body; `--exec` mode |
 | Doctor | `test_doctor.py` | missing seats, folders and vault named in plain English; missing key named but never shown; same provider in two seats; the offline stub next to a real model fails; a wrapped CLI's arguments are never shown; `--ping` flags a seat without clean JSON |
 | Integration | `integration_phase0.py` | end to end promote, reject, park and undo in a temporary tree |
+
+Client fees, quotes, job values and payment terms are allowed (James, 9 November 2026,
+reversing the 14 October amount ban). `test_team_money.py` checks unmasked client prices
+and continued private-finance denial in facts and excerpts. Existing sensitivity, scope
+and private-marker gates still apply.
 
 ## Rules for new tests
 

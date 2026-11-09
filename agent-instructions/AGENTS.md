@@ -36,8 +36,9 @@ Propose new durable facts. Do not write to the trusted folder. Ever.
   a rule, a boundary or a tool fact.
 - Do not propose: task progress, guesses or hedged statements, anything without a source,
   or reference material that lives elsewhere.
-- Never include secrets, credentials, raw transcripts, personal data, contact details or
-  money figures. If a fact needs one, leave it out.
+- Never include secrets, credentials, raw transcripts, personal data or contact details.
+- Client fees, quotes, job values and payment terms belong in team memory. Private
+  finance (including payroll, dividends and tax affairs) stays out.
 
 ### Hard rules
 

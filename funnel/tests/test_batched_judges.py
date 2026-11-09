@@ -476,18 +476,20 @@ def main():
     check("deny matches excerpt too", out["status"] == "skipped" and out["detail"] == "denied: private payroll" and not calls, str(out))
     for fact in ("The Example upgrade is priced at \u00a37,700 +VAT.", "The plan is 3,175 plus VAT per month.",
                  "Ad hoc support is 37/hr.", "Retainer: 9 hrs/mo at 3,100pm.", "Invoice 0009981 is the completion invoice.",
-                 "The base is [REDACTED:money]00 plus VAT.", "The fee is 175 GBP.", "Phase X is 31k + VAT.",
+                 "The fee is 175 GBP.", "Phase X is 31k + VAT.",
                  "Support is 2.5k a month.", "Our day rate is 620.", "A rate of 65 an hour applies.", "Billed at 65ph.",
                  "Contract work at 620 p/d.", "It came to 2750 pounds.", "Hosting is 3,100 pcm.", "The work was priced at 5,500."):
         reset()
         out, _ = route(cand(scope="org", ctype="decision", fact=fact), team_run)
-        check(f"deny amount: {fact[:30]}", out["status"] == "skipped"
-              and out["detail"] in ("denied: private amount", "not eligible (scope/sensitivity/type)")
-              and not calls and not searches, str(out))
+        check(f"client amount submitted: {fact[:30]}",
+              out["status"] == "submitted" and len(calls) == 1
+              and calls[0][calls[0].index("--body") + 1].startswith(fact), str(out))
     reset()
     out, _ = route(cand(scope="org", ctype="decision", fact="Backups run on Sunday."), team_run,
                    excerpt="Agreed at \u00a3640 plus VAT on the call.")
-    check("deny amount in excerpt too", out["status"] == "skipped" and out["detail"] == "denied: private amount" and not calls, str(out))
+    check("client amount in excerpt retained", out["status"] == "submitted" and len(calls) == 1
+          and "Agreed at " in calls[0][calls[0].index("--body") + 1]
+          and "[REDACTED:money]" not in calls[0][calls[0].index("--body") + 1], str(out))
     for fact in ("The estimator prices from a partial postcode such as ZZ99.", "The pilot covers 20 to 60 widgets.",
                  "The payment split is 50/25/25.", "Four maintenance hours a month are included.",
                  "The standup is a 3pm meeting.", "Calls run 1pm-3pm, sometimes until 10pm.", "We post 5 per day and 3 per month.",
@@ -938,10 +940,10 @@ def main():
     # ---- target-note text is scanned before it reaches a judge prompt ----
     with Env() as e:
         note = e.vault / tn
-        note.write_text("# n\n\nContact owner@example.com for the weekly backup job.\n")
+        note.write_text("# n\n\nUse key sk-abcdefghij for the weekly backup job.\n")
         pr = m.judge_prompt(cand())
         check("target note with a secret is withheld from the judge prompt",
-              "owner@example.com" not in pr and "withheld" in pr)
+              "sk-abcdefghij" not in pr and "withheld" in pr)
         note.write_text("# n\n\nBackups run every Sunday night.\n")
         check("clean target note is still shown", "Backups run every Sunday night." in m.judge_prompt(cand()))
 

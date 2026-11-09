@@ -152,7 +152,10 @@ risk: low
 ```
 
 The excerpt must appear in the source **word for word**, and it must be at least four
-words. Opinions ("I think"), contact details and money figures are refused on purpose.
+words. Opinions ("I think") are refused on purpose. Client fees, quotes, job values,
+payment terms, business emails and phone numbers are allowed. Private finance and
+personal/family material stay out of team memory.
+Deterministic secret checks refuse secrets only; Cockpit council judges flag personal contacts.
 
 ## 7. Run it
 

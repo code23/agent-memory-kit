@@ -2,6 +2,29 @@
 
 Memory rots if nobody looks after it. These jobs take about fifteen minutes a week.
 
+## Upgrading the policy (9 November 2026)
+
+Existing installs keep their own `policy.yaml`; pulling the kit does not replace it.
+Before using the updated funnel, compare that file with
+[`funnel/policy.example.yaml`](../funnel/policy.example.yaml). Preserve your vault path,
+scope settings and other local policy. Replace the old positional `forbidden_patterns`
+list with the example's mapping keyed by kind. Remove the email, money and phone
+patterns; retain the five secret patterns and add `uk_bank_account` and `card_number`.
+Keep custom patterns as additional named entries. Capture and promotion share
+`funnel/secret_patterns.py`, so copy that file too if you copy individual scripts.
+Legacy list policies fail closed at startup, including `memory.py doctor`, with an
+upgrade error rather than guessing labels.
+
+In `forbidden_domain_keywords`, replace standalone `tax`/`vat` with the example's
+private tax phrases, and remove `invoice`/`pricing strategy`. Plain client fees,
+including VAT, belong in team memory. Private finance remains denied by the funnel.
+Business emails and phones remain unmasked; the Cockpit council judges flag personal
+contacts. Card-like runs of 13–19 digits and UK sort-code/account pairs are masked.
+Ordinary UK phones and international numbers with a `+` prefix remain unmasked.
+
+Run `python3 funnel/memory.py doctor` after updating the local policy, then run the
+offline tests before using the funnel.
+
 ## Weekly lint
 
 Run the lint across the vault and read the output:

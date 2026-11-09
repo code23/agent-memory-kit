@@ -31,6 +31,7 @@ import yaml
 # MEMORY_ROOT, which defaults to this directory.
 CODE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(CODE_DIR))
+from secret_patterns import policy_patterns
 import safe_io  # noqa: E402  (shared symlink-safe writer)
 ROOT = Path(os.environ.get("MEMORY_ROOT") or CODE_DIR).expanduser().resolve()
 _POLICY_PATH = Path(os.environ["MEMORY_POLICY"]).expanduser() if os.environ.get("MEMORY_POLICY") else None
@@ -98,10 +99,8 @@ SECRET_QUARANTINE_REASON_CODES = frozenset({"forbidden-pattern"})
 # Test failpoint: when True, append_notify_feed raises (outbox path).
 _NOTIFY_FEED_FAILPOINT = False
 
-# Labels parallel to policy.yaml forbidden_patterns (index-aligned).
-FORBIDDEN_PATTERN_KINDS = [
-    "email", "api_key", "ipv4", "money", "phone", "repo_url", "env_export", "port",
-]
+# Names come from the policy itself; order cannot change redaction labels.
+FORBIDDEN_PATTERN_KINDS = list(policy_patterns(POLICY))
 
 # Staging notes whose capture failed/pending get re-mined by `memory reconcile`.
 STAGING_OUTPUTS = Path(os.environ.get("STAGING_ROOT") or (CODE_DIR.parent / "staging")).expanduser() / "_outputs"
@@ -912,11 +911,14 @@ def redact_secrets(text, patterns=None, kinds=None):
     if text is None:
         return "", []
     s = str(text)
-    pats = patterns if patterns is not None else POLICY.get("forbidden_patterns") or []
-    klist = kinds if kinds is not None else FORBIDDEN_PATTERN_KINDS
+    if patterns is None:
+        named = policy_patterns(POLICY)
+        pats, klist = list(named.values()), list(named)
+    else:
+        pats, klist = patterns, (kinds if kinds is not None else FORBIDDEN_PATTERN_KINDS)
     hits = []
     # Apply longer/more-specific patterns first by scanning each independently
-    # and replacing matches; order follows policy list.
+    # and replacing matches; order follows the named policy mapping.
     for i, pat in enumerate(pats):
         kind = klist[i] if i < len(klist) else "secret"
         try:
@@ -1539,9 +1541,9 @@ def preflight(c, vault=None, registry=None):
     if c["risk"] not in POLICY["auto_promote_risk"]:
         return "review", "risk", f"risk '{c['risk']}' not auto-promotable"
     # Sensitivity keywords/names are TAGS only, do not park (collect_sensitivity_tags).
-    for pat in POLICY["forbidden_patterns"]:
+    for pat in policy_patterns(POLICY).values():
         if re.search(pat, blob):
-            return "review", "forbidden-pattern", "matched forbidden pattern (email/key/ip/money/phone)"
+            return "review", "forbidden-pattern", "matched forbidden pattern (key/ip/repo/env/port/card/account)"
     try:
         age = (datetime.date.today() - datetime.date.fromisoformat(str(c["observed_at"]))).days
         if age > POLICY["max_source_age_days"]:
@@ -2584,23 +2586,15 @@ TEAM_DENY_RETIRED_DEFAULT = (
     "legacy build loop", "oldtool")  # terms for systems you have retired
 TEAM_DENY_PRIVATE_DEFAULT = (
     "salary", "salaries", "compensation", "payroll", "pay rise", "employee review", "people review",
-    "performance review", "appraisal", "disciplinary",
-    "dividend", "corporation tax", "vat return", "hmrc", "tax position",
-    "billing dispute")
-# Amounts, prices, rates and invoice numbers never go to team memory (policy choice): every agent reads it.
-_TEAM_MONEY = re.compile(
-    r"[£$€]\s?\d"                                                          # £9,999  £9.9k  $20
-    r"|\d[\d,.]*\s?[kKmM]?\s?(?:\+\s?VAT|plus\s+VAT|ex\.?\s?VAT|inc\.?\s?VAT)\b"  # 1,500 + VAT, 12k plus VAT
-    r"|\b(?:GBP|USD|EUR)\s?\d|\d[\d,.]*\s?(?:GBP|USD|EUR|pounds?|quid)\b"   # 175 GBP, 2750 pounds
-    r"|\b(?:rate|fee|fees|charge|cost|price|retainer)\s+(?:is|of|at|was|=|:)\s*\d{2,}"  # day rate is 620, rate of 65
-    r"|\bpriced\s+at\s+\d"                                                  # priced at 5,500
-    r"|\d{1,3}(?:,\d{3})+\s?(?:pm|pcm|p\.m\.|/mo|/month|per\s+month|a\s+month)\b"  # 3,100pm (not 3pm)
-    r"|\d+(?:\.\d+)?\s?k\s?(?:a|per|/)\s?(?:month|mo|year|yr|day|hour)\b"  # 2.5k a month
-    r"|\d{2,}\s?(?:ph|p/h|p/d|pcm)\b"                                       # 65ph, 620 p/d
-    r"|\d{2,}\s?/\s?hr\b"                                                     # 37/hr (not 20/hour)
-    r"|\binvoice\s+(?:no\.?\s*|number\s*|#\s*)?\d{3,}"                      # invoice 0009981
-    r"|REDACTED:money",
-    re.I)
+    "performance review", "appraisal", "disciplinary", "director's loan", "directors loan", "director loan", "director's loans", "directors loans", "director loans", "dla", "s455",
+    "dividend", "dividends", "drawings", "pension", "pensions", "self assessment", "self-assessment",
+    "tax return", "tax returns", "corporation tax", "vat return", "vat returns", "loan relationship", "hmrc", "tax position",
+    "billing dispute", "purchase price", "paid james", "pays james", "payment to james", "payments to james", "consultancy invoice")
+# Client fees, quotes, job values and payment terms belong in team memory.
+# James, 2026-11-09: "yes we need money showing", reversing the 2026-10-14 amount ban.
+# James, 2026-11-09: business emails/phones stay unmasked for Cockpit CRM linking;
+# council judges flag personal contacts. Personal/family rules still apply.
+# Private finance remains denied by TEAM_DENY_PRIVATE_DEFAULT above.
 _TEAM_SEEN_FACTS = set()  # in-process: fact hashes submitted by this run
 
 
@@ -2673,7 +2667,7 @@ def team_route(c, src, scope):
     Returns None unless explicitly enabled (MEMORY_TEAM_ROUTING=1), else a dict:
     {"status": "submitted", "submission_id", "detail", "fact_sha256"} | {"status": "skipped", "detail"} |
     {"status": "error", "detail"}.
-    Order: eligibility, deny list (never fails open), duplicate checks (own history + live search;
+    Order: deny list (never fails open), eligibility, duplicate checks (own history + live search;
     live search fails open), submit.
     """
     if (os.environ.get("MEMORY_TEAM_ROUTING") or "0").strip() != "1":
@@ -2681,8 +2675,6 @@ def team_route(c, src, scope):
     try:
         if not _team_bin():
             return {"status": "error", "detail": "MEMORY_TEAM_BIN is not configured (absolute path required)"}
-        if not team_route_eligible(c, scope):
-            return {"status": "skipped", "detail": "not eligible (scope/sensitivity/type)"}
         fact = " ".join(str(c.get("fact") or "").split())
         sc = normalize_scope(str(scope))  # normalised form for tags only
         if sc is None:
@@ -2694,8 +2686,8 @@ def team_route(c, src, scope):
         denied = _team_denied_term(f"{fact}\n{excerpt}", reg)
         if denied:
             return {"status": "skipped", "detail": f"denied: {denied[0]} {denied[1]}"}
-        if _TEAM_MONEY.search(f"{fact}\n{excerpt}"):
-            return {"status": "skipped", "detail": "denied: private amount"}
+        if not team_route_eligible(c, scope):
+            return {"status": "skipped", "detail": "not eligible (scope/sensitivity/type)"}
         fact_hash = hashlib.sha256(_team_norm_text(fact).encode("utf-8")).hexdigest()
         if fact_hash in _TEAM_SEEN_FACTS or fact_hash in _team_submitted_hashes():
             return {"status": "skipped", "detail": "duplicate of earlier submission (own history)",
@@ -4854,14 +4846,13 @@ def _self_checks():
 
         # redact_secrets (use fixed patterns so test is hermetic)
         pats = [
-            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
             r"\bs[k]-[A-Za-z0-9]{8,}",
         ]
-        kinds = ["email", "api_key"]
+        kinds = ["api_key"]
         out, hits = redact_secrets("mail me at a@b.co and key s" "k-abcdefghij", pats, kinds)
-        check("redact email", "[REDACTED:email]" in out and "a@b.co" not in out)
+        check("keep business email", "a@b.co" in out and "email" not in hits)
         check("redact api_key", "[REDACTED:api_key]" in out and "s" "k-abcdefghij" not in out)
-        check("redact hits list", "email" in hits and "api_key" in hits)
+        check("redact hits list", hits == ["api_key"])
         clean, hits2 = redact_secrets("no secrets here", pats, kinds)
         check("no false redaction", clean == "no secrets here" and hits2 == [])
 
@@ -4899,12 +4890,12 @@ def _self_checks():
 
         # Redacted excerpt: apply redact_secrets to body before compare
         secret_src = vault / "06-maps" / "with-secret.md"
-        secret_src.write_text("contact me at a@b.co for details\n")
-        redacted_ex = "contact me at [REDACTED:email] for details"
+        secret_src.write_text("use key sk-abcdefghij for details\n")
+        redacted_ex = "use key [REDACTED:api_key] for details"
         check("redacted excerpt verifies",
               verify_source_status(redacted_ex, secret_src) == SOURCE_VERIFIED)
         check("redacted excerpt fail-closed on mismatch",
-              verify_source_status("contact me at [REDACTED:email] NOPE", secret_src)
+              verify_source_status("use key [REDACTED:api_key] NOPE", secret_src)
               == SOURCE_CHANGED)
 
         # excerpt_verified back-compat
@@ -4983,7 +4974,7 @@ def _self_checks():
             "review-type", "type 'boundary' always reviewed (permission/boundary)",
             judge_verdicts={"judge_a": {"verdict": "hold", "reason": "x"},
                             "judge_b": {"verdict": "promote", "reason": "y"}},
-            redactions=["email"],
+            redactions=["api_key"],
             candidate=cand,
         )
         check("envelope keys",
@@ -4997,7 +4988,7 @@ def _self_checks():
               loaded.get("review", {}).get("reason_code") == "review-type")
         check("envelope round-trip judges",
               loaded["review"]["judge_verdicts"]["judge_a"]["verdict"] == "hold")
-        check("envelope redactions list", loaded["review"]["redactions"] == ["email"])
+        check("envelope redactions list", loaded["review"]["redactions"] == ["api_key"])
 
         # --- promote requires resolved target (no c['target_note'] default) ---
         missing_t = False
@@ -5637,7 +5628,7 @@ def _self_checks():
 
                 # retriage skip of forbidden-pattern envelope
                 fp = dict(clean)
-                fp["fact"] = "Contact at user@example.com for deploy keys."
+                fp["fact"] = "Use API key sk-abcdefghij for deployment."
                 env_fp = build_review_envelope(
                     "forbidden-pattern", "matched forbidden pattern", candidate=fp,
                 )

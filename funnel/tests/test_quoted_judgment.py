@@ -81,7 +81,7 @@ class QuotedJudgment(unittest.TestCase):
             judges(); e.src.unlink()
             self.assertEqual(m._retriage_one(p, False, gates_only=True)["reason_code"], "source-missing")
         with Env() as e:
-            ex = "Contact test@example.com about the weekly backup job runs."
+            ex = "Use key sk-abcdefghij for the weekly backup job."
             e.src.write_text("# s\n\n" + ex + "\n")
             p = parked(e, "sec", reason="judgment-marker", fact=GOOD, type="boundary",
                        source={"kind": "note", "path": str(e.src), "excerpt": ex})
