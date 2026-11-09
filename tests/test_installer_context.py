@@ -117,9 +117,124 @@ sys.exit(13)
     def denied(self,call):
         before=self.tree();self.store.effects.clear()
         with patch.object(subprocess,'Popen') as child:
-            with self.assertRaises((client.ClientError,security.SecurityError,OSError,ValueError,KeyError)):call()
+            with self.assertRaises((client.ClientError,security.SecurityError)):call()
             child.assert_not_called()
         self.assertEqual(self.store.effects,[]);self.assertEqual(self.tree(),before)
+
+    def test_operator_packet_and_publication_never_open_coder_paths(self):
+        packet = self.packet()
+        expected = c.digest(c.canonical(packet))
+        class TTY(io.StringIO):
+            def readline(self, *args): return expected + '\n'
+            def close(self): pass
+        tty = TTY()
+        real_directory, real_open = client._directory, os.open
+        real_stat, real_lstat, real_io_open = os.stat, os.lstat, io.open
+        def coder_path(path):
+            path = Path(path)
+            return any(path == root or root in path.parents for root in
+                       (self.project, self.home, self.ancestor, self.binary.parent))
+        @contextmanager
+        def inaccessible(path):
+            if coder_path(path): raise PermissionError('simulated other UID')
+            with real_directory(path) as fd: yield fd
+        def opened(path, *args, **kwargs):
+            if isinstance(path, (str, Path)) and Path(path).is_absolute() and coder_path(path):
+                raise PermissionError('simulated other UID')
+            return real_open(path, *args, **kwargs)
+        def metadata_probe(original):
+            def probe(path, *args, **kwargs):
+                if isinstance(path, (str, Path)) and Path(path).is_absolute() and coder_path(path):
+                    raise PermissionError('simulated other UID')
+                return original(path, *args, **kwargs)
+            return probe
+        def tty_open(path, *args, **kwargs):
+            self.assertEqual(path, '/dev/tty')
+            return tty
+        with patch.object(client, '_directory', inaccessible), \
+             patch.object(os, 'open', side_effect=opened), \
+             patch.object(os, 'stat', side_effect=metadata_probe(real_stat)), \
+             patch.object(os, 'lstat', side_effect=metadata_probe(real_lstat)), \
+             patch.object(io, 'open', side_effect=metadata_probe(real_io_open)), \
+             patch.object(c.os, 'getuid', return_value=self.operator_uid), \
+             patch('builtins.open', side_effect=tty_open):
+            self.assertEqual(c.validate_packet(packet), c.hashes(packet))
+            self.assertEqual(c.operator(packet)['generation'], 2)
+        self.assertTrue(self.preflight()['ready'])  # Coder re-observes independently.
+        self.instruction.write_text('Changed after operator approval.')
+        self.denied(self.preflight)
+
+    def test_packet_identity_types_refuse_cleanly(self):
+        packet = self.packet()
+        for key in ('project', 'device', 'inode', 'workspace', 'url', 'software', 'coding_uid'):
+            for value in (None, [], {}, True):
+                forged = copy.deepcopy(packet); forged['identity'][key] = value
+                with self.subTest(key=key, value=value), self.assertRaises(client.ClientError):
+                    c.validate_packet(forged)
+
+    def test_inert_claude_state_is_accepted_without_values_in_packet_or_registry(self):
+        marker = 'fictional-private-state-marker'
+        state = {'numStartups': 4, 'userID': marker, 'oauthAccount': {'fixture': marker},
+                 'projects': {str(self.project): {'lastCost': 1, 'lastSessionId': marker}}}
+        paths = (self.home / '.claude.json', self.config / '.claude.json')
+        for path in paths: path.write_text(json.dumps(state))
+        packet = self.packet()
+        self.assertNotIn(marker, c.canonical(packet).decode())
+        for path in paths:
+            self.assertEqual(packet['current'][str(path)]['excluded'], 'inert-claude-state')
+        self.approve()
+        for path in paths: path.write_text(json.dumps({**state, 'numStartups': 5}))
+        self.assertTrue(self.preflight()['ready'])
+        self.assertNotIn(marker, (self.registry_root / 'registry.json').read_text())
+        alternate = self.home / 'alternate-config'; alternate.mkdir()
+        (alternate / 'settings.json').write_bytes(self.settings.read_bytes())
+        alternate.with_suffix('.json').write_text(json.dumps(state))
+        with patch.object(c, '_roots', return_value=(self.home, alternate, self.managed, ())):
+            self.assertEqual(self.packet()['current'][str(alternate.with_suffix('.json'))]['excluded'],
+                             'inert-claude-state')
+
+    def test_claude_state_refuses_context_and_unknown_keys_at_both_scopes(self):
+        path = self.home / '.claude.json'
+        for key in ('mcpServers', 'mcpContextUris', 'enabledMcpjsonServers', 'disabledMcpjsonServers',
+                    'enabledMcpServers', 'disabledMcpServers', 'enableAllProjectMcpServers',
+                    'hasClaudeMdExternalIncludesApproved', 'hasTrustDialogAccepted', 'allowedTools',
+                    'hooks', 'env', 'permissions', 'autoMemoryDirectory', 'futureUnknownKey'):
+            for state in ({key: {}}, {'projects': {str(self.project): {key: []}}}):
+                path.write_text(json.dumps(state))
+                with self.subTest(key=key, project='projects' in state), self.assertRaises(client.ClientError):
+                    self.packet()
+        for state in ({'projects': []}, {'projects': {'fixture': []}}):
+            path.write_text(json.dumps(state))
+            with self.assertRaises(client.ClientError): self.packet()
+
+    def test_observe_has_three_full_plan_checks_including_final_postread(self):
+        real_check, real_read = c._check_plan, c._read
+        events = []
+        def check(metadata): events.append('check'); return real_check(metadata)
+        def read(path): events.append('read'); return real_read(path)
+        with patch.object(c, '_check_plan', side_effect=check), patch.object(c, '_read', side_effect=read):
+            self.packet()
+        self.assertEqual(events.count('check'), 3)
+        self.assertEqual(events[-1], 'check')
+
+    def test_registry_mode_is_independent_of_operator_umask(self):
+        fd = os.open(self.registry_root, os.O_RDONLY | os.O_DIRECTORY)
+        previous = os.umask(0o077)
+        try: c._publish(fd, {'version': 1, 'generation': 2, 'approval': None})
+        finally: os.umask(previous); os.close(fd)
+        self.assertEqual(stat.S_IMODE((self.registry_root / 'registry.json').stat().st_mode), 0o644)
+
+    def test_unreadable_registry_has_clear_refusal(self):
+        with patch.object(c, 'read_at', side_effect=PermissionError('fixture')):
+            with self.assertRaisesRegex(client.ClientError, 'registry.*readable'):
+                c.registry(-1, self.uid)
+
+    def test_native_executable_refuses_group_writable_parent(self):
+        self.binary.write_bytes(b'\xcf\xfa\xed\xfe' +
+            b'README_URL:"https://code.claude.com/docs/en/overview",VERSION:"2.1.318"')
+        self.binary.parent.chmod(0o775)  # Isolated fixture only.
+        with self.assertRaisesRegex(client.ClientError, 'executable.*custody'):
+            REAL_NATIVE(self.argv)
 
     def test_integrated_native_contract_approval_lifecycle(self):
         packet=self.packet()
@@ -235,7 +350,7 @@ sys.exit(13)
                     patch.object(c,'decision',side_effect=client.ClientError('fixture stop')):
                 with self.assertRaisesRegex(client.ClientError,'fixture stop'):
                     client.run(self.project/client.PROFILE_NAME,[str(self.base/name)],self.store)
-                self.assertEqual(early.call_count,0 if name in ('claude','2.1.318','2.1.319') else 1)
+                early.assert_not_called()  # Native identity is checked only by decision().
 
     @contextmanager
     def foreign_memory_guard(self, projects):
@@ -409,7 +524,7 @@ sys.exit(13)
         with self.assertRaises(client.ClientError): self.packet()
         self.assertEqual(self.store.effects, [])
 
-    def test_review_refuses_project_replacement_after_fourth_plan_check(self):
+    def test_review_refuses_project_replacement_before_final_plan_check(self):
         source = self.project / 'CLAUDE.md'
         source.write_text('Fictional ORIGINAL reviewed instructions.\n')
         original_inode = self.project.stat().st_ino
@@ -418,7 +533,7 @@ sys.exit(13)
         def replace_project(metadata):
             real_check(metadata)
             checks.append(True)
-            if len(checks) == 4:
+            if len(checks) == 2:
                 self.project.rename(self.base / 'previous-project')
                 self.project.mkdir()
                 source.write_text('Fictional REPLACEMENT unreviewed instructions.\n')
@@ -426,7 +541,7 @@ sys.exit(13)
             with self.assertRaises(client.ClientError,
                                    msg='Export paired replacement identity with ORIGINAL inventory'):
                 self.packet()
-        self.assertGreaterEqual(len(checks), 4)
+        self.assertGreaterEqual(len(checks), 2)
         self.assertNotEqual(self.project.stat().st_ino, original_inode)
         self.assertIn('ORIGINAL', (self.base / 'previous-project' / 'CLAUDE.md').read_text())
         self.assertIn('REPLACEMENT', source.read_text())
@@ -454,15 +569,11 @@ sys.exit(13)
         with patch.object(os.path, 'lexists', side_effect=absent_probe), \
                 patch.object(c, '_check_plan', side_effect=check_with_credential), \
                 patch.object(c, '_read', side_effect=read_without_credentials):
-            try:
-                packet = self.packet()
-            except client.ClientError:
-                packet = None
+            packet = self.packet()
         self.assertTrue(checks)
         self.assertTrue(credential.is_file())
-        if packet is not None:
-            self.assertTrue(packet['current'][str(credential)]['present'],
-                            'Export reported credentials absent despite presence at every plan check')
+        self.assertTrue(packet['current'][str(credential)]['present'],
+                        'Export reported credentials absent despite presence at every plan check')
         self.assertEqual(self.store.effects, [])
 
     def test_review_project_identity_stays_paired_after_final_plan_check(self):
@@ -653,19 +764,7 @@ sys.exit(13)
         foreign.mkdir(parents=True)
         marker = 'fictional-foreign-body-marker'
         (foreign / 'MEMORY.md').write_text(marker)
-        real_iterdir, real_read, real_publish = Path.iterdir, c._read, c._publish
-        forbidden = []
-        def guarded_iterdir(path):
-            if path == projects or projects in path.parents:
-                forbidden.append('enumeration')
-                self.fail('Observer enumerated unrelated project names/memory')
-            return real_iterdir(path)
-        def guarded_read(path):
-            path = Path(path)
-            if path == projects or projects in path.parents:
-                forbidden.append('body')
-                self.fail('Observer read/hashed unrelated project memory')
-            return real_read(path)
+        real_publish = c._publish
         def checked_publish(fd, value):
             encoded = c.canonical(value).decode()
             for private in (marker, 'foreign-only-project', str(foreign)):
@@ -679,7 +778,6 @@ sys.exit(13)
             for private in (marker, 'foreign-only-project', str(foreign)):
                 self.assertNotIn(private, c.canonical(packet).decode())
             self.test_integrated_native_contract_approval_lifecycle()
-        self.assertEqual(forbidden, [])
 
     def test_revoke_release_at_publication_keeps_uncertainty_sticky(self):
         self.approve()
@@ -743,16 +841,6 @@ sys.exit(13)
         foreign = projects / 'foreign-policy-fixture' / 'memory'
         foreign.mkdir(parents=True)
         (foreign / 'MEMORY.md').write_text('fictional foreign private marker')
-        real_iterdir, real_read = Path.iterdir, c._read
-        def guarded_iterdir(path):
-            self.assertFalse(path == projects or projects in path.parents,
-                             'Invalid policy enumerated project names')
-            return real_iterdir(path)
-        def guarded_read(path):
-            path = Path(path)
-            self.assertFalse(path == projects or projects in path.parents,
-                             'Invalid policy read foreign memory')
-            return real_read(path)
         with self.foreign_memory_guard(projects):
             for value in (True, None, 'false'):
                 settings = {'model': 'fixture-review'}
@@ -940,6 +1028,47 @@ else: raise AssertionError('FIFO accepted')
                 binary.chmod(0o700)  # New isolated fixture only.
                 with self.subTest(version=version),self.assertRaisesRegex(client.ClientError,'supported'):
                     REAL_NATIVE([str(binary)])
+
+
+class AuthorityDelegationTests(unittest.TestCase):
+    def test_real_authority_validates_every_delegation_boundary(self):
+        import types
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary).resolve()
+            root = base / 'delegated'
+            discovery = base / 'discovery'
+            delegation = {'version': 1, 'operator_uid': 502, 'coding_uid': 501, 'root': str(root)}
+            @contextmanager
+            def public_directory(path, uid, coding):
+                fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY)
+                try: yield fd
+                finally: os.close(fd)
+            with patch.object(c, 'DISCOVERY', discovery), \
+                 patch.object(c, '__file__', str(root / 'software/memory_kit/context_authority.py')), \
+                 patch.object(security, 'public_directory', side_effect=public_directory), \
+                 patch.object(c, 'read_at', side_effect=lambda *args: c.canonical(delegation)), \
+                 patch('pwd.getpwuid', return_value=types.SimpleNamespace(pw_name='fictional-coder')), \
+                 patch.object(security, 'standard_coding_identity', return_value={'uid': 501}) as coder, \
+                 patch.object(security, 'assert_not_agent_writable'), \
+                 patch('memory_kit.host._source_files', return_value=[]):
+                with REAL_AUTHORITY(501) as (_, uid, software):
+                    self.assertEqual(uid, 502)
+                    self.assertEqual(software, c.digest(c.canonical([])))
+                coder.assert_called_once_with('fictional-coder')
+                cases = [{**delegation, 'extra': 1}]
+                cases += [{k: v for k, v in delegation.items() if k != missing} for missing in delegation]
+                cases += [{**delegation, key: value} for key, values in (
+                    ('operator_uid', [500, 501, True, '502']),
+                    ('coding_uid', [500, 502, True, '501']),
+                    ('version', [0, 2, True]), ('root', [None, []])) for value in values]
+                original = dict(delegation)
+                for invalid in cases:
+                    delegation.clear(); delegation.update(invalid)
+                    with self.subTest(invalid=invalid), self.assertRaises(client.ClientError):
+                        with REAL_AUTHORITY(501): self.fail('Invalid delegation admitted')
+                delegation.clear(); delegation.update(original)
+                with self.assertRaises(client.ClientError):
+                    with REAL_AUTHORITY(503): self.fail('Wrong coding UID admitted')
 
 
 if __name__=="__main__":unittest.main()

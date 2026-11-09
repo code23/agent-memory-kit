@@ -1,7 +1,10 @@
-"""Offline business-client contract tests; no real Keychain or native client calls."""
+"""Binding unit tests with a permissive approval fake, never native acceptance.
+
+The fake uses reviewed=True and never invokes the legacy logthis refusal. Real
+approval and controlled-child environment checks live in test_installer_context.
+"""
 
 from contextlib import contextmanager, nullcontext
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -49,19 +52,18 @@ class ClientTests(unittest.TestCase):
         self.native_home_patch.start()
         # Legacy binding unit tests explicitly mock ONLY the new approval boundary.
         # Its real protected-custody/native-contract behavior has focused tests.
-        # Retain baseline refusal/managed validation in this fixture admission.
+        # Match reviewed binding validation; the fake admits more than production.
         @contextmanager
         def approved_binding(project, workspace, url, instance, argv):
-            client._check_logthis(project)
+            context_authority._arguments(argv)
+            if Path(argv[0]).name != "claude":
+                context_authority._native(argv)
             if (project / client.PROFILE_NAME).exists():
-                client._verify(project, client._load_profile(project / client.PROFILE_NAME))
+                client._verify(project, client._load_profile(project / client.PROFILE_NAME), reviewed=True)
             else:
-                client._prepare_binding(project, workspace, url, instance)
-            if argv is not None and (not isinstance(argv, list) or not argv
-                    or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in argv)):
-                raise client.ClientError("Supply a native coding-client command and arguments.")
+                client._prepare_binding(project, workspace, url, instance, reviewed=True)
             yield {'identity': {'environment': context_authority._environment(),
-                                'executable': {'path': argv[0] if argv else ''}, 'argv': argv}}
+                                'executable': {'path': argv[0]}, 'argv': argv}}
         # Same explicit legacy approval-boundary fixture: early metadata-only
         # admission is tested with real roots in test_installer_context.py.
         self.early_patch = patch.object(context_authority, "_early_reads", return_value=nullcontext())
@@ -78,6 +80,8 @@ class ClientTests(unittest.TestCase):
         self.addCleanup(self.context_env_patch.stop)
         self.keychain = FakeKeychain()
         self.token = b"offline-fixture-agent-token"
+        # Binding tests must explicitly mock any child they intend to exercise.
+        self.enterContext(patch.object(subprocess, 'Popen', side_effect=AssertionError('unmocked child launch')))
 
     def tearDown(self):
         self.home_patch.stop()
@@ -87,7 +91,7 @@ class ClientTests(unittest.TestCase):
 
     def connect(self, **kwargs):
         args = dict(project=self.project, workspace="business-fixture", url="http://127.0.0.1:4237/mcp",
-                    token=self.token, keychain=self.keychain, instance="fixture")
+                    token=self.token, keychain=self.keychain, instance="fixture", native_argv=["claude"])
         args.update(kwargs)
         return client.connect(**args)
 
@@ -153,76 +157,6 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.tree(), {})
         self.assertEqual(self.keychain.puts, [])
 
-    def test_global_logthis_is_detected_by_existence_without_reading(self):
-        path = self.home / ".agents/skills/logthis"
-        path.mkdir(parents=True)
-        (path / "SKILL.md").write_text("This private content must not be read.")
-        with self.assertRaisesRegex(client.ClientError, "does not support"):
-            self.connect()
-        self.assertEqual(self.tree(), {})
-
-    def test_project_logthis_workflow_refused(self):
-        (self.project / "AGENTS.md").write_text("Use the existing logthis workflow.\n")
-        before = self.tree()
-        with self.assertRaisesRegex(client.ClientError, "logthis"):
-            self.connect()
-        self.assertEqual(self.tree(), before)
-        self.assertEqual(self.keychain.puts, [])
-
-    def test_all_explicit_capture_command_spellings_fail_closed(self):
-        path = self.project / "AGENTS.md"
-        for spelling in ("log this", "log-this", "log_this", "logthis"):
-            path.write_text("When I say " + spelling + ", save to another store.\n")
-            with self.subTest(spelling=spelling), self.assertRaises(client.ClientError):
-                self.connect()
-        self.assertEqual(self.keychain.puts, [])
-
-    def test_global_alternate_command_paths_refused_without_body_reads(self):
-        for relative in (".claude/skills/log-this", ".codex/prompts/log_this.md"):
-            path = self.home / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("private contents")
-            with self.subTest(relative=relative), self.assertRaises(client.ClientError):
-                self.connect()
-            path.unlink()
-        self.assertEqual(self.tree(), {})
-
-    def test_ancestor_routing_parent_binding_and_override_paths_refused(self):
-        (self.base / ".git").mkdir()
-        for relative, contents in (("AGENTS.md", "When I say log this, capture elsewhere."),
-                                    ("CLAUDE.local.md", "Use log-this elsewhere."),
-                                    (client.PROFILE_NAME, "{}"), ("AGENTS.override.md", "Other guidance")):
-            path = self.base / relative
-            path.write_text(contents)
-            with self.subTest(relative=relative), self.assertRaises(client.ClientError):
-                self.connect()
-            path.unlink()
-        self.assertEqual(self.keychain.puts, [])
-
-    def test_private_governing_instruction_existence_is_enough_without_reading(self):
-        path = self.base / "CLAUDE.md"
-        path.write_text("Private unrelated body must not be read.")
-        real_snapshot = client._snapshot
-        def scoped_snapshot(candidate):
-            self.assertNotEqual(candidate, path)
-            return real_snapshot(candidate)
-        with patch.object(client, "_snapshot", side_effect=scoped_snapshot), self.assertRaises(client.ClientError):
-            self.connect()
-        self.assertEqual(self.tree(), {})
-
-    def test_parent_binding_outside_selected_git_root_is_refused(self):
-        (self.project / ".git").mkdir()
-        (self.base / client.PROFILE_NAME).write_text("unread parent binding")
-        with self.assertRaises(client.ClientError):
-            self.connect()
-        self.assertEqual(self.keychain.puts, [])
-
-    def test_encoded_ancestor_credential_reference_is_refused(self):
-        (self.base / ".git").mkdir()
-        (self.base / ".mcp.json").write_text('{"mcpServers":{"helper":{"env":{"copy":"AGENT\\u005fMEMORY_TOKEN"}}}}')
-        with self.assertRaises(client.ClientError):
-            self.connect()
-        self.assertEqual(self.keychain.puts, [])
 
     def test_existing_mcp_name_collision_preserves_all_data(self):
         (self.project / ".mcp.json").write_text('{"mcpServers":{"business-memory":{"url":"existing"}}}')
@@ -327,15 +261,15 @@ class ClientTests(unittest.TestCase):
             self.connect(project=target)
         self.assertEqual(list(target.iterdir()), [])
 
-    def test_codex_approval_rules_do_not_block_native_child(self):
+    def test_codex_approval_rules_do_not_block_mocked_claude_child(self):
         path = self.home / ".codex/rules"
         path.mkdir(parents=True)
         (path / "default.rules").write_text("prefix_rule fixture")
         self.connect()
         with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 0, "poll": lambda self: 0})()):
-            self.assertEqual(client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain), 0)
+            self.assertEqual(client.run(self.project / client.PROFILE_NAME, ["claude"], self.keychain), 0)
 
-    def test_unsupported_instruction_paths_preserve_all_trees_without_body_reads(self):
+    def test_missing_native_argv_preserves_instruction_trees_without_body_reads(self):
         (self.base / ".git").mkdir()
         cases = [(self.home / native / filename, False)
                  for native in (".codex", ".claude")
@@ -359,8 +293,8 @@ class ClientTests(unittest.TestCase):
                 return real_snapshot(candidate)
             with self.subTest(path=str(path.relative_to(self.base))), \
                  patch.object(client, "_snapshot", side_effect=guarded), \
-                 self.assertRaisesRegex(client.ClientError, "does not support"):
-                self.connect()
+                 self.assertRaisesRegex(client.ClientError, "native Claude"):
+                self.connect(native_argv=None)
             after = {str(item.relative_to(self.base)): item.read_bytes()
                      for item in self.base.rglob("*") if item.is_file()}
             self.assertEqual(before, after)
@@ -381,14 +315,15 @@ class ClientTests(unittest.TestCase):
                 client._identity(path)
         self.assertNotIn("private fixture diagnostic", str(failure.exception))
 
-    def test_routing_collision_does_not_cross_newlines_and_names_file(self):
+    def test_reviewed_binding_allows_unmanaged_routing_text(self):
         path = self.project / "AGENTS.md"
         path.write_text("## Audit log\n\nThis section explains records.\n")
         self.connect()
         with path.open("a") as handle:
             handle.write("\nAlways log this value.\n")
-        with self.assertRaisesRegex(client.ClientError, "AGENTS.md"):
-            client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+        with patch.object(subprocess, 'Popen', return_value=type('Child', (), {
+                'wait': lambda self: 0, 'poll': lambda self: 0})()):
+            self.assertEqual(client.run(self.project / client.PROFILE_NAME, ['claude'], self.keychain), 0)
 
     def test_case_alias_identity_is_rejected_even_when_path_spelling_differs(self):
         real_identity = client._identity
@@ -460,14 +395,14 @@ class ClientTests(unittest.TestCase):
             if data is not None:
                 path.write_bytes(data)
             with self.assertRaises(client.ClientError), patch.object(subprocess, "Popen") as launch:
-                client.run(path, ["codex-yolo"], self.keychain)
+                client.run(path, ["claude"], self.keychain)
             launch.assert_not_called()
         with self.assertRaises(client.ClientError):
-            client.run(self.project / "other.json", ["codex-yolo"], self.keychain)
+            client.run(self.project / "other.json", ["claude"], self.keychain)
 
     def test_run_passes_native_argv_unchanged_and_secret_only_in_child(self):
         self.connect()
-        argv = ["claude-yolo", "--model", "unchanged-model", "a prompt"]
+        argv = ["claude", "--model", "unchanged-model", "--dangerously-skip-permissions"]
         prior = os.environ.get(client.TOKEN_ENV)
         with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 7, "poll": lambda self: 7})()) as launch:
             self.assertEqual(client.run(self.project / client.PROFILE_NAME, argv, self.keychain), 7)
@@ -491,7 +426,7 @@ class ClientTests(unittest.TestCase):
             handle.write('\n[mcp_servers.other]\nurl = "http://127.0.0.1:77/mcp"\n')
         before = self.tree()
         with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 0, "poll": lambda self: 0})()):
-            self.assertEqual(client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain), 0)
+            self.assertEqual(client.run(self.project / client.PROFILE_NAME, ["claude"], self.keychain), 0)
         self.connect()
         self.assertEqual(self.tree(), before)
 
@@ -500,14 +435,14 @@ class ClientTests(unittest.TestCase):
         before = self.tree()
         replacement = b"offline-rotated-fixture"
         profile = client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                   replacement, self.keychain, "rotated-fixture")
+                                   replacement, self.keychain, "rotated-fixture", native_argv=["claude"])
         self.assertEqual(profile["keychain_instance"], "rotated-fixture")
         self.assertEqual(self.keychain.get("fixture", "agent"), self.token)
         self.assertEqual(self.keychain.get("rotated-fixture", "agent"), replacement)
         self.assertEqual({key: value for key, value in self.tree().items() if key != client.PROFILE_NAME},
                          {key: value for key, value in before.items() if key != client.PROFILE_NAME})
         with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 0, "poll": lambda self: 0})()) as launch:
-            client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+            client.run(self.project / client.PROFILE_NAME, ["claude"], self.keychain)
         self.assertEqual(launch.call_args.kwargs["env"][client.TOKEN_ENV], replacement.decode())
         self.assertNotIn(replacement, b"".join(self.tree().values()))
 
@@ -518,7 +453,7 @@ class ClientTests(unittest.TestCase):
                                          ("business-fixture", "http://127.0.0.1:4238/mcp", "new-fixture"),
                                          ("business-fixture", "http://127.0.0.1:4237/mcp", "fixture")):
             with self.subTest(workspace=workspace, url=url, instance=instance), self.assertRaises(client.ClientError):
-                client.reconnect(self.project, workspace, url, b"replacement-fixture", self.keychain, instance)
+                client.reconnect(self.project, workspace, url, b"replacement-fixture", self.keychain, instance, native_argv=["claude"])
         self.assertEqual(before, self.tree())
         self.assertEqual(self.keychain.puts, [("fixture", "agent")])
 
@@ -528,14 +463,14 @@ class ClientTests(unittest.TestCase):
         before = self.tree()
         with self.assertRaises(client.ClientError):
             client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                             b"replacement-fixture", self.keychain, "rotated-fixture")
+                             b"replacement-fixture", self.keychain, "rotated-fixture", native_argv=["claude"])
         self.assertEqual(before, self.tree())
         self.assertEqual(self.keychain.puts, [("fixture", "agent")])
 
     def test_reconnect_requires_existing_intact_binding_before_store_write(self):
         with self.assertRaises(client.ClientError):
             client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                             b"replacement-fixture", self.keychain, "rotated-fixture")
+                             b"replacement-fixture", self.keychain, "rotated-fixture", native_argv=["claude"])
         self.assertEqual(self.keychain.puts, [])
         self.connect()
         path = self.project / "AGENTS.md"
@@ -543,7 +478,7 @@ class ClientTests(unittest.TestCase):
         before = self.tree()
         with self.assertRaises(client.ClientError):
             client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                             b"replacement-fixture", self.keychain, "rotated-fixture")
+                             b"replacement-fixture", self.keychain, "rotated-fixture", native_argv=["claude"])
         self.assertEqual(before, self.tree())
         self.assertEqual(self.keychain.puts, [("fixture", "agent")])
 
@@ -553,10 +488,10 @@ class ClientTests(unittest.TestCase):
         with patch.object(self.keychain, "put", side_effect=RuntimeError("SECURE_STORE_UNAVAILABLE")):
             with self.assertRaises(RuntimeError):
                 client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                 b"replacement-fixture", self.keychain, "rotated-fixture")
+                                 b"replacement-fixture", self.keychain, "rotated-fixture", native_argv=["claude"])
         self.assertEqual(before, self.tree())
         with patch.object(subprocess, "Popen", return_value=type("Child", (), {"wait": lambda self: 0, "poll": lambda self: 0})()) as launch:
-            client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+            client.run(self.project / client.PROFILE_NAME, ["claude"], self.keychain)
         self.assertEqual(launch.call_args.kwargs["env"][client.TOKEN_ENV], self.token.decode())
 
     def test_reconnect_profile_commit_failure_can_retry_same_unused_secure_item(self):
@@ -565,11 +500,11 @@ class ClientTests(unittest.TestCase):
         with patch.object(client, "_replace", side_effect=RuntimeError("PROFILE_WRITE_FAILED")):
             with self.assertRaises(RuntimeError):
                 client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                 b"replacement-fixture", self.keychain, "rotated-fixture")
+                                 b"replacement-fixture", self.keychain, "rotated-fixture", native_argv=["claude"])
         self.assertEqual(before, self.tree())
         self.assertEqual(self.keychain.get("rotated-fixture", "agent"), b"replacement-fixture")
         profile = client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                   b"replacement-fixture", self.keychain, "rotated-fixture")
+                                   b"replacement-fixture", self.keychain, "rotated-fixture", native_argv=["claude"])
         self.assertEqual(profile["keychain_instance"], "rotated-fixture")
 
     def test_reconnect_compare_and_swap_preserves_concurrent_profile_edit(self):
@@ -580,7 +515,7 @@ class ClientTests(unittest.TestCase):
         with patch.object(self.keychain, "put", side_effect=concurrent_edit):
             with self.assertRaises(client.ClientError):
                 client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                 b"replacement-fixture", self.keychain, "rotated-fixture")
+                                 b"replacement-fixture", self.keychain, "rotated-fixture", native_argv=["claude"])
         self.assertEqual(path.read_text(), "concurrent user edit")
         self.assertEqual(self.keychain.get("fixture", "agent"), self.token)
 
@@ -609,14 +544,17 @@ class ClientTests(unittest.TestCase):
             profile["managed_hashes"][".mcp.json"] = client._digest(region)
             profile_path.write_text(json.dumps(profile))
             with self.subTest(key=key), self.assertRaises(client.ClientError):
-                client.run(profile_path, ["codex-yolo"], self.keychain)
+                client.run(profile_path, ["claude"], self.keychain)
 
-    def test_second_logthis_guidance_outside_managed_block_fails_closed(self):
-        self.connect()
-        with (self.project / "AGENTS.md").open("a") as handle:
-            handle.write("\nUse another logthis workflow.\n")
-        with self.assertRaises(client.ClientError):
-            client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+    def test_reviewed_guidance_uses_same_binding_validation_as_production(self):
+        with patch.object(client, '_check_logthis', side_effect=AssertionError('legacy guard')):
+            self.connect()
+            with (self.project / 'AGENTS.md').open('a') as handle:
+                handle.write('\nUse another logthis workflow.\n')
+            with patch.object(subprocess, 'Popen', return_value=type('Child', (), {
+                    'wait': lambda self: 0, 'poll': lambda self: 0})()):
+                self.assertEqual(client.run(self.project / client.PROFILE_NAME, ['claude'], self.keychain), 0)
+
 
     def test_unmanaged_servers_cannot_reuse_credential_even_with_encoded_references(self):
         self.connect()
@@ -628,7 +566,7 @@ class ClientTests(unittest.TestCase):
             mcp["mcpServers"]["helper"] = section
             mcp_path.write_text(json.dumps(mcp).replace("AGENT_MEMORY_TOKEN", "AGENT\\u005fMEMORY_TOKEN"))
             with self.subTest(section=section), self.assertRaises(client.ClientError):
-                client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+                client.run(self.project / client.PROFILE_NAME, ["claude"], self.keychain)
         mcp_path.write_text(before)
         path = self.project / ".codex/config.toml"
         original = path.read_text()
@@ -637,13 +575,13 @@ class ClientTests(unittest.TestCase):
                       '\n# AGENT_MEMORY_TOKEN is referenced here\n'):
             path.write_text(original + extra)
             with self.subTest(extra=extra), self.assertRaises(client.ClientError):
-                client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+                client.run(self.project / client.PROFILE_NAME, ["claude"], self.keychain)
 
     def test_preflight_refuses_existing_binding_without_rekey_before_readiness(self):
         self.connect()
         with self.assertRaises(client.ClientError):
             client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                    self.keychain, "fixture", os.getuid())
+                                    self.keychain, "fixture", os.getuid(), native_argv=["claude"])
         self.assertEqual(self.keychain.readiness_checks, 0)
 
     def test_stale_lock_preflight_refuses_before_new_token_or_mutation(self):
@@ -651,7 +589,7 @@ class ClientTests(unittest.TestCase):
         before = self.tree()
         with self.assertRaises(client.ClientError):
             client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                    self.keychain, "fixture", os.getuid())
+                                    self.keychain, "fixture", os.getuid(), native_argv=["claude"])
         self.assertEqual(self.tree(), before)
         self.assertEqual(self.keychain.readiness_checks, 0)
         self.assertEqual(self.keychain.puts, [])
@@ -687,11 +625,11 @@ class ClientTests(unittest.TestCase):
         path.write_bytes(before.replace(b"never approve or publish", b"approve and publish"))
         with patch.object(subprocess, "Popen") as launch:
             with self.assertRaises(client.ClientError):
-                client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+                client.run(self.project / client.PROFILE_NAME, ["claude"], self.keychain)
             path.write_bytes(before)
             self.keychain.values.clear()
             with self.assertRaises(client.ClientError):
-                client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+                client.run(self.project / client.PROFILE_NAME, ["claude"], self.keychain)
             launch.assert_not_called()
 
     def test_profile_workspace_cannot_disagree_with_instructions(self):
@@ -702,17 +640,9 @@ class ClientTests(unittest.TestCase):
         path.write_text(json.dumps(profile))
         with patch.object(subprocess, "Popen") as launch:
             with self.assertRaises(client.ClientError):
-                client.run(path, ["codex-yolo"], self.keychain)
+                client.run(path, ["claude"], self.keychain)
             launch.assert_not_called()
 
-    def test_new_global_logthis_conflict_refuses_launch(self):
-        self.connect()
-        path = self.home / ".codex/skills/logthis"
-        path.mkdir(parents=True)
-        with patch.object(subprocess, "Popen") as launch:
-            with self.assertRaises(client.ClientError):
-                client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
-            launch.assert_not_called()
 
     def test_group_writable_codex_directory_refuses_launch(self):
         self.connect()
@@ -720,29 +650,22 @@ class ClientTests(unittest.TestCase):
         path.chmod(0o770)
         with patch.object(subprocess, "Popen") as launch:
             with self.assertRaises(client.ClientError):
-                client.run(self.project / client.PROFILE_NAME, ["codex-yolo"], self.keychain)
+                client.run(self.project / client.PROFILE_NAME, ["claude"], self.keychain)
             launch.assert_not_called()
         path.chmod(0o700)
 
-    def test_real_child_receives_only_scoped_environment_and_requested_exit_status(self):
+    def test_non_claude_child_is_refused_before_launch(self):
         self.connect()
-        argv = [sys.executable, "-c",
-                'import os,sys,json,tomllib,pathlib; p=pathlib.Path.cwd(); '
-                'assert os.environ.get("AGENT_MEMORY_TOKEN"); assert str(p) == sys.argv[1]; '
-                'assert "business-fixture" in (p/"AGENTS.md").read_text(); '
-                'assert "business-fixture" in (p/"CLAUDE.md").read_text(); '
-                'assert json.loads((p/".mcp.json").read_text())["mcpServers"]["business-memory"]["url"] == "http://127.0.0.1:4237/mcp"; '
-                'assert tomllib.loads((p/".codex/config.toml").read_text())["mcp_servers"]["business-memory"]["bearer_token_env_var"] == "AGENT_MEMORY_TOKEN"; '
-                'sys.exit(13)',
-                str(self.project)]
-        prior = os.environ.get(client.TOKEN_ENV)
-        self.assertEqual(client.run(self.project / client.PROFILE_NAME, argv, self.keychain), 13)
-        self.assertNotIn(self.token.decode(), " ".join(argv))
-        self.assertEqual(os.environ.get(client.TOKEN_ENV), prior)
+        for argv in ([sys.executable, '-c', 'raise SystemExit(13)'], ['codex-yolo']):
+            with self.subTest(argv=argv), patch.object(subprocess, 'Popen') as child:
+                with self.assertRaises(client.ClientError):
+                    client.run(self.project / client.PROFILE_NAME, argv, self.keychain)
+                child.assert_not_called()
+
 
     def test_connection_sink_preflight_is_readonly_and_checks_expected_coding_uid(self):
         ready = client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                        self.keychain, "fixture", os.getuid())
+                                        self.keychain, "fixture", os.getuid(), native_argv=["claude"])
         self.assertTrue(ready["ready"])
         self.assertFalse(ready["item_access_verified"])
         self.assertFalse(ready["credential_received"])
@@ -752,10 +675,12 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.keychain.readiness_checks, 1)
         with self.assertRaises(client.ClientError):
             client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                    self.keychain, "fixture", os.getuid() + 1)
+                                    self.keychain, "fixture", os.getuid() + 1, native_argv=["claude"])
         self.assertEqual(self.keychain.readiness_checks, 1)
 
-    def test_clean_lifecycle_preserves_native_models_routing_and_unrelated_settings(self):
+    def test_mocked_claude_binding_lifecycle_preserves_native_models_routing_and_unrelated_settings(self):
+        self.enterContext(patch.object(subprocess, 'Popen', return_value=type('Child', (), {
+            'wait': lambda self: 0, 'poll': lambda self: 0})()))
         codex = self.home / ".codex/config.toml"
         claude = self.home / ".claude/settings.json"
         routing = self.home / "native-routing.json"
@@ -776,30 +701,19 @@ class ClientTests(unittest.TestCase):
         untouched_before = untouched.read_bytes()
         before = self.tree()
         client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                self.keychain, "fixture", os.getuid())
+                                self.keychain, "fixture", os.getuid(), native_argv=["claude"])
         self.assertEqual(self.tree(), before)
         self.connect()
-        child = (
-            'import hashlib,json,os,pathlib,sys,tomllib; '
-            'assert hashlib.sha256(os.environ["AGENT_MEMORY_TOKEN"].encode()).hexdigest() == sys.argv[2]; '
-            'assert tomllib.loads((pathlib.Path(os.environ["CODEX_HOME"])/"config.toml").read_text())["model"] == "fixture-lead"; '
-            'assert json.loads((pathlib.Path(os.environ["CLAUDE_CONFIG_DIR"])/"settings.json").read_text())["model"] == "fixture-review"; '
-            'assert json.loads(pathlib.Path(sys.argv[1]).read_text()) == {"lead":"fixture-lead","worker":"fixture-worker","review":"fixture-review"}; '
-            'assert sys.argv[3:] == ["--model","fixture-worker","--yolo"]; '
-            'assert json.loads((pathlib.Path.cwd()/".mcp.json").read_text())["mcpServers"]["business-memory"]["url"] == "http://127.0.0.1:4237/mcp"'
-        )
-        argv = [sys.executable, "-B", "-c", child, str(routing), hashlib.sha256(self.token).hexdigest(),
-                "--model", "fixture-worker", "--yolo"]
+        argv = ['claude', '--model', 'fixture-worker', '--dangerously-skip-permissions']
         prior_token = os.environ.get(client.TOKEN_ENV)
         self.assertEqual(client.run(self.project / client.PROFILE_NAME, argv, self.keychain), 0)
         bound = self.tree()
         client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                self.keychain, "rotated-fixture", os.getuid(), rekey=True)
+                                self.keychain, "rotated-fixture", os.getuid(), rekey=True, native_argv=["claude"])
         self.assertEqual(self.tree(), bound)
         rotated_token = b"offline-rotated-fixture"
         client.reconnect(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                         rotated_token, self.keychain, "rotated-fixture")
-        argv[5] = hashlib.sha256(rotated_token).hexdigest()
+                         rotated_token, self.keychain, "rotated-fixture", native_argv=["claude"])
         self.assertEqual(client.run(self.project / client.PROFILE_NAME, argv, self.keychain), 0)
         self.assertEqual(os.environ.get(client.TOKEN_ENV), prior_token)
         self.assertEqual({path: path.read_bytes() for path in globals_before}, globals_before)
@@ -811,59 +725,8 @@ class ClientTests(unittest.TestCase):
         self.assertEqual({name: value for name, value in self.tree().items() if name != client.PROFILE_NAME},
                          {name: value for name, value in bound.items() if name != client.PROFILE_NAME})
 
-    def test_existing_global_context_refuses_entire_bound_lifecycle_before_side_effects(self):
-        self.connect()
-        instruction = self.home / ".codex/AGENTS.md"
-        capture = self.home / ".agents/skills/logthis/SKILL.md"
-        for bodies in ((instruction,), (capture,), (instruction, capture)):
-            for path in bodies:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("Fictional private context: preserve without reading.\n")
-            before = {str(path.relative_to(self.base)): path.read_bytes()
-                      for path in self.base.rglob("*") if path.is_file()}
-            modes = {path: stat.S_IMODE(path.stat().st_mode) for path in bodies}
-            real_snapshot = client._snapshot
-            def scoped_snapshot(path):
-                self.assertNotIn(path, bodies)
-                return real_snapshot(path)
-            operations = {
-                "connect-check": lambda: client.check_connection(
-                    self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                    self.keychain, "rotated-fixture", os.getuid(), rekey=True),
-                "connect": self.connect,
-                "reconnect": lambda: client.reconnect(
-                    self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                    b"offline-rotated-fixture", self.keychain, "rotated-fixture"),
-                "run": lambda: client.run(self.project / client.PROFILE_NAME, ["fixture-native"], self.keychain),
-            }
-            for operation, invoke in operations.items():
-                try:
-                    for path in bodies:
-                        path.chmod(0)
-                    with self.subTest(context=[str(path.relative_to(self.home)) for path in bodies], operation=operation), \
-                         patch.object(client, "_snapshot", side_effect=scoped_snapshot), \
-                         patch.object(self.keychain, "get") as get, \
-                         patch.object(self.keychain, "put") as put, \
-                         patch.object(self.keychain, "check_ready") as ready, \
-                         patch.object(subprocess, "Popen") as launch:
-                        with self.assertRaisesRegex(client.ClientError, "does not support"):
-                            invoke()
-                        get.assert_not_called()
-                        put.assert_not_called()
-                        ready.assert_not_called()
-                        launch.assert_not_called()
-                finally:
-                    for path, mode in modes.items():
-                        path.chmod(mode)
-                self.assertEqual({path: stat.S_IMODE(path.stat().st_mode) for path in bodies}, modes)
-                self.assertEqual(before, {str(path.relative_to(self.base)): path.read_bytes()
-                                          for path in self.base.rglob("*") if path.is_file()})
-            for path in bodies:
-                path.unlink()
-            if capture in bodies:
-                capture.parent.rmdir()
 
-    def test_existing_global_context_refuses_initial_preflight_and_connect_without_body_reads(self):
+    def test_missing_native_argv_refuses_preflight_and_connect_without_body_reads(self):
         instruction = self.home / ".claude/CLAUDE.md"
         capture = self.home / ".agents/skills/logthis/SKILL.md"
         for bodies in ((instruction,), (capture,), (instruction, capture)):
@@ -880,8 +743,8 @@ class ClientTests(unittest.TestCase):
             operations = {
                 "connect-check": lambda: client.check_connection(
                     self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                    self.keychain, "fixture", os.getuid()),
-                "connect": self.connect,
+                    self.keychain, "fixture", os.getuid(), native_argv=None),
+                "connect": lambda: self.connect(native_argv=None),
             }
             for operation, invoke in operations.items():
                 try:
@@ -893,7 +756,7 @@ class ClientTests(unittest.TestCase):
                          patch.object(self.keychain, "put") as put, \
                          patch.object(self.keychain, "check_ready") as ready, \
                          patch.object(subprocess, "Popen") as launch:
-                        with self.assertRaisesRegex(client.ClientError, "does not support"):
+                        with self.assertRaisesRegex(client.ClientError, "native Claude"):
                             invoke()
                         get.assert_not_called()
                         put.assert_not_called()
@@ -910,12 +773,12 @@ class ClientTests(unittest.TestCase):
             if capture in bodies:
                 capture.parent.rmdir()
 
-    def test_connection_sink_preflight_rejects_collisions_before_keychain_readiness(self):
-        (self.project / "CLAUDE.md").write_text("Use a private logthis workflow.\n")
+    def test_connection_sink_preflight_rejects_server_collision_before_keychain_readiness(self):
+        (self.project / '.mcp.json').write_text('{"mcpServers":{"business-memory":{"type":"http","url":"http://127.0.0.1:77/mcp"}}}')
         before = self.tree()
         with self.assertRaises(client.ClientError):
             client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                    self.keychain, "fixture", os.getuid())
+                                    self.keychain, "fixture", os.getuid(), native_argv=["claude"])
         self.assertEqual(before, self.tree())
         self.assertEqual(self.keychain.readiness_checks, 0)
 
@@ -923,7 +786,7 @@ class ClientTests(unittest.TestCase):
         with patch.object(self.keychain, "check_ready", side_effect=RuntimeError("KEYCHAIN_LOCKED")):
             with self.assertRaisesRegex(RuntimeError, "KEYCHAIN_LOCKED"):
                 client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                        self.keychain, "fixture", os.getuid())
+                                        self.keychain, "fixture", os.getuid(), native_argv=["claude"])
         self.assertEqual(self.tree(), {})
         self.assertEqual(self.keychain.puts, [])
 
@@ -931,7 +794,7 @@ class ClientTests(unittest.TestCase):
         with patch.object(client, "standard_coding_identity", side_effect=client.SecurityError("STANDARD_CODING_ACCOUNT_REQUIRED")):
             with self.assertRaises(client.SecurityError):
                 client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                        self.keychain, "fixture", os.getuid())
+                                        self.keychain, "fixture", os.getuid(), native_argv=["claude"])
         self.assertEqual(self.tree(), {})
         self.assertEqual(self.keychain.readiness_checks, 0)
 
@@ -939,14 +802,14 @@ class ClientTests(unittest.TestCase):
         self.connect()
         before = self.tree()
         client.check_connection(self.project, "business-fixture", "http://127.0.0.1:4237/mcp",
-                                self.keychain, "rotated-fixture", os.getuid(), rekey=True)
+                                self.keychain, "rotated-fixture", os.getuid(), rekey=True, native_argv=["claude"])
         self.assertEqual(before, self.tree())
         for workspace, instance, rekey in (("another-business", "rotated-fixture", True),
                                            ("business-fixture", "fixture", True),
                                            ("business-fixture", "rotated-fixture", False)):
             with self.subTest(workspace=workspace, instance=instance, rekey=rekey), self.assertRaises(client.ClientError):
                 client.check_connection(self.project, workspace, "http://127.0.0.1:4237/mcp",
-                                        self.keychain, instance, os.getuid(), rekey=rekey)
+                                        self.keychain, instance, os.getuid(), rekey=rekey, native_argv=["claude"])
         self.assertEqual(before, self.tree())
 
 

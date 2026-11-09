@@ -520,7 +520,10 @@ def _prepare_binding(project, workspace, url, instance, reviewed=False):
 
 
 def _connect(project: Path, workspace: str, url: str, token: bytes, keychain, instance: str) -> dict:
-    """Bind an explicitly selected project; credentials remain solely in Keychain."""
+    """Store the token in Keychain; run() exposes it in the child environment.
+
+    The native child and its subprocesses can read that plaintext token.
+    """
     project = _project(project)
     _check_lock(project)
     _validate_values(workspace, url, instance)
@@ -673,9 +676,7 @@ def _check_connection(project: Path, workspace: str, url: str, keychain, instanc
 def connect(project, workspace, url, token, keychain, instance, native_argv=None):
     from . import context_authority as context
     project = _project(project)
-    if native_argv is None:
-        with context._early_reads(project):
-            _check_logthis(project)
+    context._arguments(native_argv)
     with context.decision(project, workspace, url, instance, native_argv):
         return _connect(project, workspace, url, token, keychain, instance)
 
@@ -683,9 +684,7 @@ def connect(project, workspace, url, token, keychain, instance, native_argv=None
 def reconnect(project, workspace, url, token, keychain, instance, native_argv=None):
     from . import context_authority as context
     project = _project(project)
-    if native_argv is None:
-        with context._early_reads(project):
-            _check_logthis(project)
+    context._arguments(native_argv)
     with context.decision(project, workspace, url, instance, native_argv):
         return _reconnect(project, workspace, url, token, keychain, instance)
 
@@ -695,9 +694,7 @@ def check_connection(project, workspace, url, keychain, instance, expected_uid,
     from . import context_authority as context
     project = _project(project)
     _validate_values(workspace, url, instance)
-    if native_argv is None:
-        with context._early_reads(project):
-            _check_logthis(project)
+    context._arguments(native_argv)
     if expected_uid != os.getuid():
         raise ClientError("Connection preflight coding UID changed.")
     if review_context:
@@ -711,13 +708,11 @@ def run(profile: Path, argv: list, keychain) -> int:
     profile = Path(profile)
     if profile.name != PROFILE_NAME:
         raise ClientError("Select the project's .agent-memory.json profile.")
+    context._arguments(argv)
     project = _project(profile.parent)
     _check_lock(project)
     with context._early_reads(project):
         loaded = _load_profile(profile)
-        if not argv or (Path(argv[0]).name != 'claude'
-                        and 'claude-code/'+Path(argv[0]).name not in context.SUPPORTED_CONTRACTS):
-            _check_logthis(project)
     with context.decision(project, loaded['workspace'], loaded['url'], loaded['keychain_instance'], argv) as packet:
         _verify(project, loaded, reviewed=True)
         value = _token_text(keychain.get(loaded['keychain_instance'], 'agent'))

@@ -282,3 +282,40 @@ so identical-baseline attribution is unproved. Node24 cannot load libsimdjson;
 lead reported Node22v22.16.0 integrity PASS. Neither runtime nor host repair was
 run here. Loader/token/rollback/broader coverage and real native/twoUID/Keychain
 acceptance remain open.
+
+
+## Whole-candidate repair checks, 9 November 2026
+
+The client binding fixture now uses `reviewed=True`, never `_check_logthis`,
+and is intentionally more permissive than production approval. Ten obsolete
+legacy capture/global-context refusal cases were retired: they claimed behavior
+that the supported reviewed path never supplied. The retained no-body-read cases
+explicitly test missing-native-argv refusal only. Supported export reads accepted
+instruction bodies for operator review; it does not promise those bodies stay in
+the coding account. Non-Claude child scenarios assert refusal. Mocked native
+binding/rotation checks are labelled, while the context suite exercises the real
+`decision()` and a controlled fictional Python child for argv, model, environment,
+credential inheritance, native settings and capture dispatch.
+
+New regressions cover operator validation/publication with coder opens, reads and
+stats denied; typed packet identity; inert state without account values in packet
+or registry; context/unknown state-key refusal; reduced full-plan checks with the
+last check after all reads; restrictive-umask registry publication and clear
+unreadable-registry refusal; executable parent custody; and PostgreSQL cleanup on
+start failure, signals during child creation and parent-directory fsync. Real
+`authority()` unit tests cover delegation shape, version/types, both UID floors,
+operator/coder separation and coding-UID match with protected custody mocked.
+The credentials-presence regression now requires a successful packet, unused
+guards are removed, and `denied()` accepts only ClientError/SecurityError.
+
+The initial default interpreter lacked pytest/PyYAML. Checks use the existing
+public-kit test environment and native `getconf DARWIN_USER_TEMP_DIR`; no package
+was installed. During repair, a stale refusal assertion reached one unintended
+local Claude invocation, which exited on missing input. The client fixture now
+blocks every unmocked child launch. This was not native acceptance; no prompts or
+business requests were submitted, and no live-pilot state was inspected.
+
+The real two-UID boundary is untested because the native rehearsal is not being
+run (James, 9 November 2026). No installation, account/host-permission change,
+Keychain operation or new model review is part of these tests. See the
+[repair scope and open findings](mac-installation-plan.md#whole-candidate-repair-9-november-2026-offline).

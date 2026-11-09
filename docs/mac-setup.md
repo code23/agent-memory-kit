@@ -95,7 +95,9 @@ exactly `claude-code/2.1.318` and `claude-code/2.1.319`: **2.1.319 observer cand
 2.1.318 is retained only for compatibility, not recommended; 2.1.319 includes
 security fixes. Changelog review and binary string comparison are triage, not
 proof of identical loading behaviour; discovery coverage remains unproven.
-Rollout remains **NO GO** with the native rehearsal gate unchanged. See the
+Rollout remains **NO GO** with the native rehearsal gate unchanged. The real
+two-UID boundary is untested because the rehearsal is not being run (James,
+9 November 2026). See the [whole-candidate repairs and open findings](mac-installation-plan.md#whole-candidate-repair-9-november-2026-offline). See the
 [installation plan](mac-installation-plan.md#local-observer-candidate-and-limits).
 Host bootstrap of the fixed root-owned Context Authority and delegated protected
 software is a separate, unrun gate. Existing service installation does not create
@@ -127,7 +129,7 @@ The agent receives a `read_submit` token. It can read published facts and propos
   members add --workspace demo-business --user coding-agent --role member
 ```
 
-Token output must go directly through a secure input pipe to `memory-kit connect` in the coding account's own credential context. Never display it, put it in an argument, copy it to chat or save it in an ordinary file. `connect` reads stdin and stores the token in that account's Keychain; TTY input is refused.
+Token output must go directly through a secure input pipe to `memory-kit connect` in the coding account's own credential context. Never display it, put it in an argument, copy it to chat or save it in an ordinary file. `connect` reads stdin and stores the token in that account's Keychain; TTY input is refused. At launch, `run` passes the plaintext token in the native child's `AGENT_MEMORY_TOKEN` environment variable; its subprocesses inherit it. Tool output can persist it in plaintext transcripts. The token must remain limited to read plus pending-submit for its single workspace; this wrapper cannot prevent the child from disclosing it.
 
 The intended cross-account route is a pre-authorized SSH pipe into the coding account's active, unlocked session. Follow the [preflight, transfer and re-key commands](../agent-instructions/business-memory.md#credential-transfer-across-the-two-accounts). This requires separately prepared SSH access and verified host identity. Setup does not enable Remote Login, bypass authentication or assume `sudo` unlocks another user's Keychain. **The transfer has not passed two-account acceptance.** Do not improvise a file or terminal-display workaround. The final novice walkthrough remains a release gate until that exact route is tested.
 

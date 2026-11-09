@@ -652,6 +652,48 @@ class HostTests(unittest.TestCase):
                 host.uninstall(config)
         self.assertTrue(path.exists())
 
+    def test_start_timeout_still_stops_owned_cluster_during_install(self):
+        with patch.object(host, '_start_pg', side_effect=host.HostError('start timeout')):
+            with self.assertRaisesRegex(host.HostError, 'start timeout'):
+                host.install(self.preflight, self.store)
+        self.assertEqual(self.calls[-1][0][-1], 'stop')
+
+    def test_daemon_start_failure_still_stops_owned_cluster(self):
+        with patch.object(host, 'credential', return_value='fixture'), \
+             patch.object(host, '_start_pg', side_effect=host.HostError('start timeout')), \
+             patch.object(host, '_pg') as stop:
+            with self.assertRaisesRegex(host.HostError, 'start timeout'):
+                host.daemon({'node': 'fixture'})
+        stop.assert_called_once_with({'node': 'fixture'}, '-w', '-t', '30', '-m', 'fast', 'stop')
+
+    def test_daemon_signal_during_spawn_is_not_lost(self):
+        config = self.install()
+        child = Mock(); child.poll.return_value = 0; child.wait.return_value = 0
+        handlers = {}
+        def handler(sig, callback): handlers[sig] = callback
+        def spawn(*args, **kwargs):
+            handlers[host.signal.SIGTERM](host.signal.SIGTERM, None)
+            return child
+        with patch.object(host, 'credential', return_value='postgresql://u:p@localhost/db'), \
+             patch.object(host, '_start_pg'), patch.object(host, '_pg'), \
+             patch.object(host.signal, 'signal', side_effect=handler), \
+             patch.object(host.subprocess, 'Popen', side_effect=spawn):
+            self.assertEqual(host.daemon(config), 0)
+        child.terminate.assert_called_once()
+
+    def test_config_replace_fsyncs_parent_directory(self):
+        config = self.install()
+        events = []
+        real_sync, real_replace = os.fsync, os.replace
+        def sync(fd):
+            events.append(('sync', host.stat.S_ISDIR(os.fstat(fd).st_mode)))
+            return real_sync(fd)
+        def replace(*args, **kwargs):
+            events.append(('replace', False)); return real_replace(*args, **kwargs)
+        with patch.object(os, 'fsync', side_effect=sync), patch.object(os, 'replace', side_effect=replace):
+            host._save_config(self.root / 'config.json', config, self.uid)
+        self.assertEqual(events, [('sync', False), ('replace', False), ('sync', True)])
+
     def test_runtime_failure_stops_only_owned_cluster(self):
         original = self.command
         def fail_bootstrap(argv, **kwargs):

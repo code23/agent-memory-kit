@@ -58,12 +58,12 @@ def identity(uid):
 
 @contextmanager
 def authority(coding_uid=None):
-    """Resolve only the root-owned fixed delegation and protected running code."""
+    """Resolve the root-owned delegation and protected software files on disk."""
     # Discovery is rooted in root custody, independent of packet/environment.
     probe={'uid':os.getuid()}
     with security.public_directory(DISCOVERY, 0, probe) as fd:
         delegation = parse(read_at(fd, 'authority.json', 0))
-    if (set(delegation) != {'version', 'operator_uid', 'coding_uid', 'root'} or delegation['version'] != 1
+    if (set(delegation) != {'version', 'operator_uid', 'coding_uid', 'root'} or type(delegation['version']) is not int or delegation['version'] != 1
             or type(delegation['operator_uid']) is not int
             or type(delegation['coding_uid']) is not int or delegation['coding_uid'] < 501
             or delegation['operator_uid'] < 501 or delegation['operator_uid'] == delegation['coding_uid']
@@ -95,6 +95,61 @@ SOURCE_FILES = ('CLAUDE.md', 'CLAUDE.local.md', 'AGENTS.md', '.claude/CLAUDE.md'
 SOURCE_TREES = ('rules', 'skills', 'commands', 'agents', 'prompts')
 
 
+# Conservative observed key-name inventory, 2026-11-09; sources and exclusions
+# are documented in docs/mac-installation-plan.md. No account values are exported.
+INERT_STATE_KEYS = frozenset({
+    'userID', 'anonymousId', 'machineID', 'oauthAccount', 'numStartups',
+    'firstStartTime', 'installMethod', 'migrationVersion', 'lastOnboardingVersion',
+    'hasCompletedOnboarding', 'hasIdeOnboardingBeenShown', 'hasUsedBackslashReturn',
+    'shiftEnterKeyBindingInstalled', 'lastReleaseNotesSeen', 'changelogLastFetched',
+    'announcementImpressions', 'seenNotifications', 'tipsHistory', 'tipsHistoryByCommand',
+    'tipLifetimeShownCounts', 'feedbackSurveyState', 'lastShownEmergencyTip',
+    'ideHintShownCount', 'subscriptionNoticeCount', 'birthdayHatAnimationCount',
+    'btwUseCount', 'promptQueueUseCount', 'hasSeenStashHint', 'hasSeenTasksHint',
+    'hasUsedStash', 'effortCalloutDismissed', 'effortCalloutV2Dismissed',
+    'hasSeenEffortMediumNudgeByModel', 'diffSidebarOpen', 'showSpinnerTree',
+    'lastClawdEntranceVersion', 'claudeCodeFirstTokenDate',
+})
+INERT_PROJECT_STATE_KEYS = frozenset({
+    'lastCost', 'lastDuration', 'lastAPIDuration', 'lastAPIDurationWithoutRetries',
+    'lastToolDuration', 'lastLinesAdded', 'lastLinesRemoved', 'lastTotalInputTokens',
+    'lastTotalOutputTokens', 'lastTotalCacheCreationInputTokens',
+    'lastTotalCacheReadInputTokens', 'lastTotalWebSearchRequests', 'lastModelUsage',
+    'lastFpsAverage', 'lastFpsLow1Pct', 'lastSessionId', 'lastSessionMetrics',
+    'lastSessionModified', 'lastStartTime', 'lastGracefulShutdown', 'lastVersionBase',
+})
+CONTEXT_STATE_KEYS = frozenset({
+    'mcpServers', 'mcpContextUris', 'enabledMcpjsonServers', 'disabledMcpjsonServers',
+    'enabledMcpServers', 'disabledMcpServers', 'enableAllProjectMcpServers',
+    'allowedMcpServers', 'deniedMcpServers', 'managedMcpServers',
+    'hasTrustDialogAccepted', 'hasTrustDialogHooksAccepted',
+    'hasClaudeMdExternalIncludesApproved', 'hasClaudeMdExternalIncludesWarningShown',
+    'allowedTools', 'ignorePatterns', 'exampleFiles', 'exampleFilesGeneratedAt',
+    'hooks', 'env', 'permissions', 'autoMemoryEnabled', 'autoMemoryDirectory',
+    'model', 'additionalDirectories', 'enabledPlugins', 'extraKnownMarketplaces',
+    'autoConnectIde', 'autoInstallIdeExtension', 'claudeInChromeDefaultEnabled',
+    'chromeExtension', 'autoUpdates', 'autoUpdatesProtectedForNative',
+    'remoteControlSpawnMode', 'defaultToAgentsView', 'externalEditorContext',
+})
+INERT_STATE = {'excluded': 'inert-claude-state', 'classification': 'keys/v1'}
+
+
+def _classify_state(value):
+    """Fail closed at each loader scope; inert account/metrics values stay local."""
+    def check_keys(mapping, allowed):
+        if not isinstance(mapping, dict): fail('Malformed Claude Code state scope.')
+        if set(mapping) & CONTEXT_STATE_KEYS:
+            fail('Context-affecting Claude Code state is unsupported.')
+        if set(mapping) - allowed:
+            fail('Unknown Claude Code state key is unsupported.')
+    check_keys(value, INERT_STATE_KEYS | {'projects'})
+    projects = value.get('projects', {})
+    if not isinstance(projects, dict): fail('Malformed Claude Code project state.')
+    for project in projects.values():
+        check_keys(project, INERT_PROJECT_STATE_KEYS)
+    return dict(INERT_STATE)
+
+
 def _roots():
     from .client import _home
     home = _home()
@@ -117,19 +172,24 @@ def _native(argv):
     """Observe exact native release identity without invoking the client."""
     import shutil
     if not isinstance(argv, list) or not argv or any(not isinstance(x,str) or not x or '\x00' in x for x in argv):
-        fail('Supply native Claude command arguments.')
+        fail('Native Claude Code argv is required; supply native Claude command arguments.')
     selected = shutil.which(argv[0])
     if not selected:
         fail('Claude executable is unavailable.')
     path = Path(selected).resolve(strict=True)
     if 'claude-code/'+path.name not in SUPPORTED_CONTRACTS or path.parent.name != 'versions':
         fail('Unsupported Claude Code native release layout; only versions/2.1.318 and versions/2.1.319 are supported.')
+    for candidate in (path,) + tuple(path.parents):
+        info = candidate.lstat()
+        if info.st_uid not in (0, os.getuid()) or info.st_mode & 0o022:
+            fail('Native executable or ancestor custody is unsafe.')
     from .client import _directory
     with _directory(path.parent) as fd:
         opened = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
         try:
             before = os.fstat(opened)
-            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_mode & 0o022:
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                    or before.st_uid not in (0, os.getuid()) or before.st_mode & 0o022):
                 fail('Native executable identity is unsafe.')
             h = hashlib.sha256()
             magic = os.read(opened,4)
@@ -168,7 +228,7 @@ def _environment():
 
 def _arguments(argv):
     if not isinstance(argv, list) or not argv or any(not isinstance(x,str) or not x or '\x00' in x for x in argv):
-        fail('Supply native Claude command arguments.')
+        fail('Native Claude Code argv is required; supply native Claude command arguments.')
     index=1
     while index<len(argv):
         value=argv[index]
@@ -227,6 +287,8 @@ def _classified(path, kind='markdown'):
         if 'autoMemoryEnabled' in value and type(value['autoMemoryEnabled']) is not bool:fail('Invalid auto-memory setting.')
         if 'model' in value and not isinstance(value['model'],str):fail('Invalid native model setting.')
         if 'permissions' in value and value['permissions'] not in ({},{'defaultMode':'bypassPermissions'}):fail('Unsupported permission settings mechanism.')
+    elif kind=='state':
+        return _classify_state(parse(text))
     elif kind=='empty':
         if parse(text)!={}:fail('Nonempty managed policy/global configuration is unsupported.')
     elif kind=='mcp':
@@ -461,14 +523,20 @@ def _inactive_memory_root(identity):
     return str(config / 'projects')
 
 
-def _admit_native_namespace(project, config):
-    """Reject overlap/aliases using directory metadata before any context intake."""
-    from .client import _directory
+def _validate_namespaces(project, config):
+    """Validate recorded path spelling without opening coder-owned folders."""
     project, config = Path(project), Path(config)
     if any(not path.is_absolute() or path != Path(os.path.abspath(path)) for path in (project, config)):
         fail('Project and native configuration need canonical absolute namespaces.')
     if config == project or project in config.parents:
         fail('Native configuration inside the project namespace is unsupported.')
+    return project, config
+
+
+def _admit_native_namespace(project, config):
+    """Coder-side alias checks before any context intake."""
+    from .client import _directory
+    project, config = _validate_namespaces(project, config)
     try:
         with _directory(project) as fd:
             info = os.fstat(fd)
@@ -514,9 +582,9 @@ def _plan_sources(project):
         if os.path.lexists(config/name):fail('Signed remote cache metadata is unsupported by this subset.')
         inventory[str(config/name)]=None
     # The global mixed account/configuration file cannot silently hide local MCP.
-    inventory[str(home/'.claude.json')]=_plan_slot(slots, metadata, home/'.claude.json','empty')
-    inventory[str(config/'.claude.json')]=_plan_slot(slots, metadata, config/'.claude.json','empty')
-    if config!=home/'.claude':inventory[str(config.with_suffix('.json'))]=_plan_slot(slots, metadata, config.with_suffix('.json'),'empty')
+    inventory[str(home/'.claude.json')]=_plan_slot(slots, metadata, home/'.claude.json','state')
+    inventory[str(config/'.claude.json')]=_plan_slot(slots, metadata, config/'.claude.json','state')
+    if config!=home/'.claude':inventory[str(config.with_suffix('.json'))]=_plan_slot(slots, metadata, config.with_suffix('.json'),'state')
     for name in SOURCE_TREES:_tree(config/name,inventory,slots,metadata)
     _plan_empty(config/'plugins',inventory,metadata)
     _plan_empty(config/'agent-memory',inventory,metadata)
@@ -573,18 +641,15 @@ def observe(project, workspace, url, instance, argv, software_digest):
         projects = config / 'projects'
         inventory[str(projects)] = {'inactive': INACTIVE_AUTO_MEMORY,
                                     'present': metadata['paths'][str(projects)][0] is not None}
-        _check_plan(metadata)
         if client._snapshot(project/client.PROFILE_NAME) is None:
             _,_,outputs,_=client._prepare_binding(project,workspace,url,instance,reviewed=True)
         else:
             loaded=client._load_profile(project/client.PROFILE_NAME)
             if (loaded['workspace'],loaded['url'])!=(workspace,url):fail('Context workspace/service changed.')
             outputs=client._verify(project,loaded,reviewed=True)
-        _check_plan(metadata)
         current=dict(inventory);prospective=dict(inventory)
         for name in client._FILES:
             prospective[str(project/name)]={'text':outputs[name].decode(),'sha256':digest(outputs[name])}
-            if str(project/name) not in current:current[str(project/name)]=_classified(project/name)
         _check_plan(metadata)
         info=metadata['paths'][str(project)][0]
         return {'version':1,'contract':'claude-code/'+native['version'],'excluded':list(EXCLUDED),
@@ -604,13 +669,13 @@ def hashes(value):
 
 def validate_packet(packet):
     if (not isinstance(packet,dict) or set(packet)!={'version','contract','excluded','identity','current','prospective'}
-            or packet['version']!=1 or packet['contract'] not in SUPPORTED_CONTRACTS
+            or packet['version']!=1 or not isinstance(packet['contract'], str) or packet['contract'] not in SUPPORTED_CONTRACTS
             or packet['excluded']!=list(EXCLUDED) or not isinstance(packet['identity'],dict)
             or set(packet['identity'])!={'coding_uid','project','device','inode','workspace','url','argv','environment','software','executable'}
             or type(packet['identity']['coding_uid']) is not int
             or not isinstance(packet['identity']['environment'],dict)):
         fail('Invalid native context review packet.')
-    if any(key not in {'HOME','CLAUDE_CONFIG_DIR','CODEX_HOME','PATH','ANTHROPIC_MODEL','ANTHROPIC_DEFAULT_MODEL','ANTHROPIC_DEFAULT_OPUS_MODEL','ANTHROPIC_DEFAULT_SONNET_MODEL','ANTHROPIC_DEFAULT_HAIKU_MODEL'} or not isinstance(value,str) for key,value in packet['identity']['environment'].items()):
+    if any(key not in {'HOME','CLAUDE_CONFIG_DIR','CODEX_HOME','PATH','ANTHROPIC_MODEL','ANTHROPIC_DEFAULT_MODEL','ANTHROPIC_DEFAULT_OPUS_MODEL','ANTHROPIC_DEFAULT_SONNET_MODEL','ANTHROPIC_DEFAULT_HAIKU_MODEL'} or not isinstance(value,str) or '\x00' in value for key,value in packet['identity']['environment'].items()):
         fail('Review packet contains unclassified environment or credentials.')
     # The operator validates recorded identity only; the coding user's decision()
     # observes the current executable again before authorising launch.
@@ -618,17 +683,27 @@ def validate_packet(packet):
     if (not isinstance(native,dict) or set(native)!={'path','version','sha256'}
             or not isinstance(native['version'],str)
             or 'claude-code/'+native['version'] not in SUPPORTED_CONTRACTS
-            or not isinstance(native['path'],str) or Path(native['path']).name!=native['version']
+            or not isinstance(native['path'],str) or not Path(native['path']).is_absolute()
+            or Path(native['path']) != Path(os.path.abspath(native['path']))
+            or Path(native['path']).name!=native['version']
             or Path(native['path']).parent.name!='versions'
             or not isinstance(native['sha256'],str) or len(native['sha256'])!=64
             or any(char not in '0123456789abcdef' for char in native['sha256'])
             or packet['contract'] != 'claude-code/'+native['version']):
         fail('Native executable review identity is inconsistent.')
     _arguments(packet['identity']['argv'])
+    recorded = packet['identity']
+    if (recorded['coding_uid'] < 501
+            or any(type(recorded[key]) is not int or recorded[key] < 0 for key in ('device', 'inode'))
+            or any(not isinstance(recorded[key], str) or not recorded[key] or '\x00' in recorded[key]
+                   for key in ('project', 'workspace', 'url', 'software'))):
+        fail('Invalid recorded context identity.')
+    from .client import _validate_values
+    _validate_values(recorded['workspace'], recorded['url'], 'packet-validation')
     # Operator hashes exactly the escaped UTF-8 bytes it displays, including
     # prospective managed sources. No body survives into the public registry.
     inactive_root = _inactive_memory_root(packet['identity'])
-    _admit_native_namespace(packet['identity']['project'], Path(inactive_root).parent)
+    _validate_namespaces(packet['identity']['project'], Path(inactive_root).parent)
     for tree in (packet['current'],packet['prospective']):
         if not isinstance(tree,dict):fail('Invalid context inventory.')
         _require_auto_memory_disabled(tree, Path(inactive_root).parent / 'settings.json')
@@ -639,7 +714,7 @@ def validate_packet(packet):
             fail('Missing or malformed fixed inactive auto-memory root.')
         for path,entry in tree.items():
             if not isinstance(path,str) or not Path(path).is_absolute():fail('Invalid inventory path.')
-            if entry is None or entry=={'directory':True}:continue
+            if entry is None or entry=={'directory':True} or entry == INERT_STATE:continue
             if path == inactive_root:
                 continue
             if isinstance(entry,dict) and set(entry)=={'excluded','present'} and entry['excluded']=='credentials' and type(entry['present']) is bool:continue
@@ -649,7 +724,10 @@ def validate_packet(packet):
 
 
 def registry(fd, uid):
-    value = parse(read_at(fd, 'registry.json', uid))
+    try:
+        value = parse(read_at(fd, 'registry.json', uid))
+    except (PermissionError, FileNotFoundError):
+        fail('Context registry is not readable; ask the operator to repair its published mode.')
     if (set(value) != {'version', 'generation', 'approval'} or value['version'] != 1
             or type(value['generation']) is not int or value['generation'] < 1
             or value['approval'] is not None and not isinstance(value['approval'], dict)):
@@ -676,6 +754,7 @@ def _publish(fd, value):
     opened = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=fd)
     try:
         with os.fdopen(opened, 'wb') as handle:
+            os.fchmod(handle.fileno(), 0o644)
             handle.write(canonical(value))
             handle.flush()
             os.fsync(handle.fileno())

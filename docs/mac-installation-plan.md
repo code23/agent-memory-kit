@@ -5,13 +5,16 @@
 **NO GO:** keep the optional launch-context guard as a draft, parked
 pending native acceptance. Accepted historical core evidence and the existing
 internal pilot are unchanged; live pilot health was not rechecked. Original
-programme start of 5 November at 13:20 is retained; product repair count is now 16.
+programme start of 5 November at 13:20 is retained; the previously recorded
+product repair count was 16, before this bounded whole-candidate repair slice.
 
 **2.1.319 observer candidate, 9 November.** The explicit local observer contracts
 are `claude-code/2.1.318` and `claude-code/2.1.319`. This adds a candidate, not
 native acceptance. The protected rollout remains **NO GO** and the version-matched
 native guarded-lifecycle rehearsal gate is unchanged. See the
 [qualification and limits](#local-observer-candidate-and-limits).
+
+See [whole-candidate repair and remaining findings](#whole-candidate-repair-9-november-2026-offline).
 
 **Observation hardening, 8 November (offline only).** The three confirmed
 observation defects below are now closed in `memory_kit/context_authority.py` by
@@ -331,7 +334,7 @@ The local remote-policy cache is observed when empty; active unclassified cache
 or signature metadata refuses. Remote fetching itself is outside the boundary.
 
 This conservative subset refuses imports/dynamic Markdown/frontmatter, nonempty
-plugins/managed policy/global mixed account configuration, managed preferences,
+plugins/managed policy, context-affecting or unknown mixed account-state keys, managed preferences,
 unknown settings/context arguments/injection environment, linked worktrees and
 unclassifiable support files. Auto-memory must already be explicitly disabled in
 the selected native user's `settings.json`, with no contrary observed setting;
@@ -353,7 +356,10 @@ attempts the exclusive launch lock for at most 0.2 seconds before publication.
 When acquired, that lock spans atomic publication. Otherwise publication proceeds
 and uncertainty stays true even if a shared lock releases during publication.
 A held readable shared lock cannot indefinitely block revocation publication.
-The launch lock is released after child creation, before waiting. This first
+The launch lock is released after child creation, before waiting.
+`in_flight_launch_uncertain` covers only the authorization/child-creation window;
+`false` does not mean no session is running. Revocation never stops an existing
+session or removes the token already inherited by that process. This first
 version supports one active project per delegated registry; changing project
 requires explicit revoke. The fixed discovery/bootstrap remains an unrun host gate.
 
@@ -495,3 +501,123 @@ so identical-baseline attribution is unproved. Node24 cannot load libsimdjson;
 lead reported Node22v22.16.0 integrity PASS. Neither runtime nor host repair was
 run here. Loader/token/rollback/broader coverage and real native/twoUID/Keychain
 acceptance remain open.
+
+## Whole-candidate repair, 9 November 2026 (offline)
+
+The guarantee remains **reviewed local observations during the authorization
+lookup**. No immutable filesystem or later native-consumption claim is made.
+Rollout stays **NO GO**. The real two-UID boundary is untested because the native
+rehearsal is not being run (James, 9 November 2026). No installation, account,
+host-permission or live-pilot change is part of this repair.
+
+Operator `validate_packet` checks typed recorded identity, canonical absolute
+path spelling, namespace separation and packet self-consistency only. It never
+opens or stats the coding user's project/configuration/executable paths. The
+coding user's `decision()` independently re-observes sources before registry
+comparison. The simulation denies coder-path opens, body reads and metadata
+probes throughout operator validation/publication; it then restores the coder's
+view and verifies changed instructions refuse. The real `authority()` has direct
+unit coverage for delegation key set/version, both UID floors/types, distinct
+UIDs and exact coding-UID match; root custody and account identities remain mocked.
+
+### Mixed Claude Code account-state classification
+
+For `~/.claude.json`, `$CLAUDE_CONFIG_DIR/.claude.json` and the selected
+`<config>.json` sibling, the chosen design is **refusal**, rather than packet
+inclusion, for context-affecting keys. Their presence refuses even with an empty
+value. Unknown keys also refuse. `projects` is a structural container only:
+every project's entry must be an object with only the project inert keys below.
+Inert account/UI/metrics values are opaque and stay local: neither their text,
+values, project names nor a digest of their changing values enters the packet or
+registry. A fixed `inert-claude-state` / `keys/v1` marker records classification;
+normal startup-counter changes therefore do not invalidate approval. Full planned
+metadata checks still catch concurrent state-file changes during observation.
+
+Sources: the official [settings files and precedence](https://code.claude.com/docs/en/settings)
+and its [settings reference](https://code.claude.com/docs/en/settings-reference),
+plus [MCP scopes, project approvals and server enablement](https://code.claude.com/docs/en/mcp),
+read on 9 November 2026. These describe loader scopes, account state, global
+configuration, MCP definitions and approvals; they do not publish a complete
+internal-state schema. The conservative inert inventory below was selected from
+**key names only** in the local `.claude.json` on that date. No local account
+values or per-project path names were printed, logged or stored. This is a
+maintained subset for 2.1.318/2.1.319, not general compatibility with every file
+Claude Code writes. Caches, trust flags and other unclassified fields may still
+refuse normal installations; never delete them or select a clean profile to bypass
+refusal. Documented context keys absent from the explicit refusal set still
+refuse through the unknown-key rule.
+
+Top-level inert allow-list (`INERT_STATE_KEYS`):
+
+`announcementImpressions`, `anonymousId`, `birthdayHatAnimationCount`, `btwUseCount`
+`changelogLastFetched`, `claudeCodeFirstTokenDate`, `diffSidebarOpen`, `effortCalloutDismissed`
+`effortCalloutV2Dismissed`, `feedbackSurveyState`, `firstStartTime`, `hasCompletedOnboarding`
+`hasIdeOnboardingBeenShown`, `hasSeenEffortMediumNudgeByModel`, `hasSeenStashHint`, `hasSeenTasksHint`
+`hasUsedBackslashReturn`, `hasUsedStash`, `ideHintShownCount`, `installMethod`
+`lastClawdEntranceVersion`, `lastOnboardingVersion`, `lastReleaseNotesSeen`, `lastShownEmergencyTip`
+`machineID`, `migrationVersion`, `numStartups`, `oauthAccount`
+`promptQueueUseCount`, `seenNotifications`, `shiftEnterKeyBindingInstalled`, `showSpinnerTree`
+`subscriptionNoticeCount`, `tipLifetimeShownCounts`, `tipsHistory`, `tipsHistoryByCommand`
+`userID`
+
+Per-project inert allow-list (`INERT_PROJECT_STATE_KEYS`):
+
+`lastAPIDuration`, `lastAPIDurationWithoutRetries`, `lastCost`, `lastDuration`
+`lastFpsAverage`, `lastFpsLow1Pct`, `lastGracefulShutdown`, `lastLinesAdded`
+`lastLinesRemoved`, `lastModelUsage`, `lastSessionId`, `lastSessionMetrics`
+`lastSessionModified`, `lastStartTime`, `lastToolDuration`, `lastTotalCacheCreationInputTokens`
+`lastTotalCacheReadInputTokens`, `lastTotalInputTokens`, `lastTotalOutputTokens`, `lastTotalWebSearchRequests`
+`lastVersionBase`
+
+Explicit context refusal keys at either scope (`CONTEXT_STATE_KEYS`):
+
+`additionalDirectories`, `allowedMcpServers`, `allowedTools`, `autoConnectIde`
+`autoInstallIdeExtension`, `autoMemoryDirectory`, `autoMemoryEnabled`, `autoUpdates`
+`autoUpdatesProtectedForNative`, `chromeExtension`, `claudeInChromeDefaultEnabled`, `defaultToAgentsView`
+`deniedMcpServers`, `disabledMcpServers`, `disabledMcpjsonServers`, `enableAllProjectMcpServers`
+`enabledMcpServers`, `enabledMcpjsonServers`, `enabledPlugins`, `env`
+`exampleFiles`, `exampleFilesGeneratedAt`, `externalEditorContext`, `extraKnownMarketplaces`
+`hasClaudeMdExternalIncludesApproved`, `hasClaudeMdExternalIncludesWarningShown`, `hasTrustDialogAccepted`, `hasTrustDialogHooksAccepted`
+`hooks`, `ignorePatterns`, `managedMcpServers`, `mcpContextUris`
+`mcpServers`, `model`, `permissions`, `remoteControlSpawnMode`
+
+Settings outside this mixed-state file retain their existing conservative
+classification: models/limited permissions/disabled auto-memory are reviewed;
+other settings, hooks, plugins, environment sources, imports, managed preferences,
+remote caches and unsupported sources refuse. This repair adds no context-source
+bypass and never reads native credentials to classify them.
+
+### Cost and credential exposure
+
+Observation now makes three full plan checks: after discovery, immediately
+before source bodies, and after the final binding/source read. The two middle
+checks were removed; the shared per-path/descriptor identity guards remain active.
+A `run` still performs an early metadata plan and two `decision()` observations:
+seven full checks instead of eleven. Each check still walks every planned path's
+ancestors; cost grows with path count and depth, and native executable hashing
+still occurs per observation. No large-repository timing claim is made. Supported
+projects are ordinary owned directory trees without descendant symlinks; common
+`node_modules/.bin` and `.venv/bin` links can still refuse the whole project.
+
+The token is stored in Keychain and passed in `AGENT_MEMORY_TOKEN` in the native
+child's environment. Its subprocesses inherit it and can print it into plaintext
+Claude transcripts or send it elsewhere. The installer does not prevent this.
+The bundled MCP server exposes read tools and, only for `read_submit` with
+submissions enabled, pending submission. Its API requires the credential's exact
+single workspace and supplies no approval/publication capability to that bot.
+These are source observations, not a new live token/authorization test.
+
+Only software files on disk are protected by delegation. A cooperative coding
+process performs the interlock; refusing `PYTHON*` inside Python does not undo
+startup imports or protect the already-running interpreter.
+
+### Open findings after this repair
+
+- Context 4 residual: parent walks and conservative symlink refusal remain; a larger discovery/performance redesign is outside this bounded repair.
+- Context 6 residual: revoke output gains no new field/message; the existing field is documented as authorization-window certainty to avoid changing the CLI response contract.
+- Context 8 residual: the explicit 0644 registry remains readable by all local users and discloses project metadata, PATH and argv; a coding-user-only ACL needs separately authorized permission/bootstrap work.
+- Context 11: the bounded canonical JSON terminal view remains cumbersome; review presentation needs a separate operator-UX change.
+- Host 3: PostgreSQL support files/dylibs and Python site-package trust need a wider prefix/loader audit; host changes here are limited to requested findings 1, 2 and 5.
+- Host 4: lifecycle test custody mocks remain; changing them is outside the explicitly limited host repair, and does not replace real two-UID acceptance.
+- Native loading/lifecycle, discovery completeness, protected bootstrap, two-account Keychain transfer and host recovery remain untested release gates; the rehearsal is not being run.
+- No new model review was requested or run, per this repair's instruction; the earlier whole-candidate reviews remain the source of these finding IDs.

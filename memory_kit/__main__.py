@@ -63,9 +63,7 @@ def main(argv=None):
                 # Current context authority is checked before accepting credential input.
                 from . import context_authority
                 project = client._project(args.project)
-                if args.native_argv is None:
-                    with context_authority._early_reads(project):
-                        client._check_logthis(project)
+                context_authority._arguments(args.native_argv)
                 with context_authority.decision(project, args.workspace, args.url,
                                                 args.instance, args.native_argv):
                     pass

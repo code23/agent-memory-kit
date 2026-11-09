@@ -89,6 +89,11 @@ def _save_config(path, config, uid):
     temporary = path.with_name(".config-" + secrets.token_hex(8))
     _write_new(temporary, (json.dumps(config, sort_keys=True, indent=2) + "\n").encode())
     os.replace(str(temporary), str(path))
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _free_port(port):
@@ -506,8 +511,8 @@ def install(preflight, keychain=None):
         if config["phase"] != "installed":
             config["phase"] = "cluster_ready"
         _save_config(root / "config.json", config, uid)
-        _start_pg(config)
         try:
+            _start_pg(config)
             _bootstrap(config, values)
             config["phase"] = "installed"
             _save_config(root / "config.json", config, uid)
@@ -653,17 +658,22 @@ def uninstall(config):
 def daemon(config, keychain=None):
     """launchd child: own PostgreSQL, retrieve only submitter credentials, drain on stop."""
     dsn = credential(config, "submitter", keychain)
-    _start_pg(config)
     child = None
+    stopping = False
     def shutdown(signum, frame):
+        nonlocal stopping
+        stopping = True
         if child is not None:
             child.terminate()
     previous = {sig: signal.signal(sig, shutdown) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
+        _start_pg(config)
         child = subprocess.Popen([config["node"], str(_software(config) / "runtime/team-memory-server.mjs"),
                                   "--allow-submissions"],
                                  env=clean_env(dict(_database_env(config, dsn), PORT=str(SERVICE_PORT))),
                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if stopping:
+            child.terminate()
         return child.wait()
     finally:
         if child is not None and child.poll() is None:
