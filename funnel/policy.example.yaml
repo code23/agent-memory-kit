@@ -42,7 +42,7 @@ forbidden_domain_keywords:
   health:     [health, medical, doctor, diagnosis, therapy, medication, mental health, neurodiver, addiction, adhd, autism]
   legal_tax:  [legal, lawsuit, solicitor, corporation tax, hmrc, vat return, self assessment, self-assessment, tax return, immigration, visa, contract dispute, regulatory, compliance]
   security:   [password, api key, token, secret, credential, auth flow, private key, encryption, encryption-key, '.env', 'key must', 'keys must', ssh, ip address, backup location, recovery, 2fa, mfa]
-  finance_op: [revenue, margin, salary, runway, bank account, sort code, budget, profit, debt]
+  finance_op: [revenue, margin, salary, runway, bank account, sort code, profit, debt]
   reputation: [unreliable, difficult client, overcharg, incompetent, dishonest, disliked, poor performer, problematic]
 
 # Personal-sensitive names -> tag as name:<Name> (not park).
