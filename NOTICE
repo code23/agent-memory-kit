@@ -1,0 +1,16 @@
+Agent Memory Kit runtime notices
+
+The repository LICENSE applies to the original Agent Memory Kit materials.
+The first-party code bundled in runtime/ is licensed under Apache License 2.0.
+Copyright 2026 Rakazo contributors.
+See licenses/Apache-2.0.txt for the original license and copyright notice.
+
+The runtime also incorporates third-party software under its respective licenses.
+See licenses/runtime-dependencies.json and licenses/third-party/ for package
+versions, declared licenses, and the license texts supplied by installed packages.
+This includes MIT, BSD-3-Clause, ISC, and Unlicense components. postgres 3.4.7
+declares Unlicense in its package metadata and ships no separate license file.
+
+The license inventory includes every third-party package root in the checked
+build's input closure, including inputs removed by tree shaking. It does not
+relicense any third-party software.

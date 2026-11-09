@@ -1,5 +1,7 @@
 # Agent memory kit
 
+The self-hosted Mac service is being prepared on the release-candidate branch. Its [Mac setup walkthrough](docs/mac-setup.md) covers the candidate installer; [installer acceptance](docs/installer-testing.md) defines the tests and report required before client use. [SOURCE.md](SOURCE.md) records the packaged runtime's source and licenses. The existing three-model YOLO workflow remains intact. The file-vault kit below remains the current reference implementation until the new installation path passes acceptance.
+
 A reference kit for the way I give AI agents a shared, trusted memory. It is not a product.
 It is the scripts, policy, templates and documents I use, cleaned up so you can read them,
 borrow what helps and change the rest.
@@ -68,6 +70,8 @@ examples/                  fictional facts, notes and demo scripts
 
 | Document | What it covers |
 |----------|----------------|
+| [docs/mac-setup.md](docs/mac-setup.md) | Candidate self-hosted Mac service and protected coding-account setup |
+| [docs/installer-testing.md](docs/installer-testing.md) | Offline, native and installed-client checks, evidence and release verdict |
 | [docs/first-real-run.md](docs/first-real-run.md) | From a fresh clone to your first fact checked by real models, then a daily schedule |
 | [docs/promotion-protocol.md](docs/promotion-protocol.md) | Inbox, evidence, write lock, local commit |
 | [docs/folder-layout.md](docs/folder-layout.md) | An example vault with staging and trusted folders |
@@ -104,7 +108,7 @@ python3 vault/scripts/vault_lint.py
 VAULT_ROOT=/path/to/your/vault python3 vault/scripts/vault_lint.py
 ```
 
-**Run the tests.** They are offline and use fixtures:
+**Run the complete tests.** The installer tests require Python 3.11 or newer; the file-vault tools above retain their existing requirements. Tests are offline and use fixtures:
 
 ```bash
 ./run-tests.sh
