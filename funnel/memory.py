@@ -100,7 +100,7 @@ _NOTIFY_FEED_FAILPOINT = False
 
 # Labels parallel to policy.yaml forbidden_patterns (index-aligned).
 FORBIDDEN_PATTERN_KINDS = [
-    "email", "api_key", "ipv4", "phone", "repo_url", "env_export", "port",
+    "api_key", "ipv4", "repo_url", "env_export", "port",
 ]
 
 # Staging notes whose capture failed/pending get re-mined by `memory reconcile`.
@@ -1541,7 +1541,7 @@ def preflight(c, vault=None, registry=None):
     # Sensitivity keywords/names are TAGS only, do not park (collect_sensitivity_tags).
     for pat in POLICY["forbidden_patterns"]:
         if re.search(pat, blob):
-            return "review", "forbidden-pattern", "matched forbidden pattern (email/key/ip/phone)"
+            return "review", "forbidden-pattern", "matched forbidden pattern (key/ip/repo/env/port)"
     try:
         age = (datetime.date.today() - datetime.date.fromisoformat(str(c["observed_at"]))).days
         if age > POLICY["max_source_age_days"]:
@@ -2589,6 +2589,8 @@ TEAM_DENY_PRIVATE_DEFAULT = (
     "billing dispute")
 # Client fees, quotes, job values and payment terms belong in team memory.
 # James, 2026-11-09: "yes we need money showing", reversing the 2026-10-14 amount ban.
+# James, 2026-11-09: business emails/phones stay unmasked for Cockpit CRM linking;
+# council judges flag personal contacts. Personal/family rules still apply.
 # Private finance remains denied by TEAM_DENY_PRIVATE_DEFAULT above.
 _TEAM_SEEN_FACTS = set()  # in-process: fact hashes submitted by this run
 
@@ -4841,14 +4843,13 @@ def _self_checks():
 
         # redact_secrets (use fixed patterns so test is hermetic)
         pats = [
-            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
             r"\bs[k]-[A-Za-z0-9]{8,}",
         ]
-        kinds = ["email", "api_key"]
+        kinds = ["api_key"]
         out, hits = redact_secrets("mail me at a@b.co and key s" "k-abcdefghij", pats, kinds)
-        check("redact email", "[REDACTED:email]" in out and "a@b.co" not in out)
+        check("keep business email", "a@b.co" in out and "email" not in hits)
         check("redact api_key", "[REDACTED:api_key]" in out and "s" "k-abcdefghij" not in out)
-        check("redact hits list", "email" in hits and "api_key" in hits)
+        check("redact hits list", hits == ["api_key"])
         clean, hits2 = redact_secrets("no secrets here", pats, kinds)
         check("no false redaction", clean == "no secrets here" and hits2 == [])
 
@@ -4886,12 +4887,12 @@ def _self_checks():
 
         # Redacted excerpt: apply redact_secrets to body before compare
         secret_src = vault / "06-maps" / "with-secret.md"
-        secret_src.write_text("contact me at a@b.co for details\n")
-        redacted_ex = "contact me at [REDACTED:email] for details"
+        secret_src.write_text("use key sk-abcdefghij for details\n")
+        redacted_ex = "use key [REDACTED:api_key] for details"
         check("redacted excerpt verifies",
               verify_source_status(redacted_ex, secret_src) == SOURCE_VERIFIED)
         check("redacted excerpt fail-closed on mismatch",
-              verify_source_status("contact me at [REDACTED:email] NOPE", secret_src)
+              verify_source_status("use key [REDACTED:api_key] NOPE", secret_src)
               == SOURCE_CHANGED)
 
         # excerpt_verified back-compat
@@ -4970,7 +4971,7 @@ def _self_checks():
             "review-type", "type 'boundary' always reviewed (permission/boundary)",
             judge_verdicts={"judge_a": {"verdict": "hold", "reason": "x"},
                             "judge_b": {"verdict": "promote", "reason": "y"}},
-            redactions=["email"],
+            redactions=["api_key"],
             candidate=cand,
         )
         check("envelope keys",
@@ -4984,7 +4985,7 @@ def _self_checks():
               loaded.get("review", {}).get("reason_code") == "review-type")
         check("envelope round-trip judges",
               loaded["review"]["judge_verdicts"]["judge_a"]["verdict"] == "hold")
-        check("envelope redactions list", loaded["review"]["redactions"] == ["email"])
+        check("envelope redactions list", loaded["review"]["redactions"] == ["api_key"])
 
         # --- promote requires resolved target (no c['target_note'] default) ---
         missing_t = False
@@ -5624,7 +5625,7 @@ def _self_checks():
 
                 # retriage skip of forbidden-pattern envelope
                 fp = dict(clean)
-                fp["fact"] = "Contact at user@example.com for deploy keys."
+                fp["fact"] = "Use API key sk-abcdefghij for deployment."
                 env_fp = build_review_envelope(
                     "forbidden-pattern", "matched forbidden pattern", candidate=fp,
                 )

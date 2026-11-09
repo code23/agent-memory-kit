@@ -941,10 +941,10 @@ def main():
     # ---- target-note text is scanned before it reaches a judge prompt ----
     with Env() as e:
         note = e.vault / tn
-        note.write_text("# n\n\nContact owner@example.com for the weekly backup job.\n")
+        note.write_text("# n\n\nUse key sk-abcdefghij for the weekly backup job.\n")
         pr = m.judge_prompt(cand())
         check("target note with a secret is withheld from the judge prompt",
-              "owner@example.com" not in pr and "withheld" in pr)
+              "sk-abcdefghij" not in pr and "withheld" in pr)
         note.write_text("# n\n\nBackups run every Sunday night.\n")
         check("clean target note is still shown", "Backups run every Sunday night." in m.judge_prompt(cand()))
 

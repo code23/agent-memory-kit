@@ -54,11 +54,11 @@ sensitive_names: ["Example Person", "Another Example", "Third Example"]
 # Other hard stops (in code): schema/type/scope validity, unverifiable source,
 # unknown scope, stale source age, non-low risk, judgement markers, weak excerpt.
 # ---------------------------------------------------------------------------
+# James, 2026-11-09: business emails and phones are team knowledge, unmasked for CRM linking.
+# Cockpit council judges flag personal contacts; personal/family rules still apply.
 forbidden_patterns:
-  - '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'   # emails
   - '\bs[k]-[A-Za-z0-9]{8,}'                              # api keys
   - '\b(?:\d{1,3}\.){3}\d{1,3}\b'                       # IPv4
-  - '\b\+?\d[\d ]{8,}\d\b'                              # phone numbers
   - '(github|gitlab)\.com/'                             # internal repo / deploy URLs
   - 'export [A-Z_]{4,}'                                 # env-var / connection config
   - ':\d{4,5}\b'                                        # host ports (connection detail)
