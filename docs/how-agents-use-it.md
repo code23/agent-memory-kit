@@ -56,7 +56,8 @@ Every proposal needs a **source** (a path to something that can be re-read) and 
 **observed date**. The excerpt must be copied word for word from the source.
 
 **Never propose** secrets (passwords, tokens, keys, connection strings), raw transcripts,
-personal data about individuals, contact details, or money figures. The checks refuse these
+personal data about individuals or contact details. Client fees, quotes, job values and
+payment terms belong in team memory; private finance stays out. The checks refuse secrets and contact details
 anyway, and a refusal is logged. Do not try to rephrase around the check.
 
 ## Then the check

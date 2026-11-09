@@ -152,7 +152,8 @@ risk: low
 ```
 
 The excerpt must appear in the source **word for word**, and it must be at least four
-words. Opinions ("I think"), contact details and money figures are refused on purpose.
+words. Opinions ("I think"), contact details are refused on purpose. Client fees, quotes, job values and payment terms
+are allowed; private finance stays out of team memory.
 
 ## 7. Run it
 

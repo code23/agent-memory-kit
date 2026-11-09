@@ -100,7 +100,7 @@ _NOTIFY_FEED_FAILPOINT = False
 
 # Labels parallel to policy.yaml forbidden_patterns (index-aligned).
 FORBIDDEN_PATTERN_KINDS = [
-    "email", "api_key", "ipv4", "money", "phone", "repo_url", "env_export", "port",
+    "email", "api_key", "ipv4", "phone", "repo_url", "env_export", "port",
 ]
 
 # Staging notes whose capture failed/pending get re-mined by `memory reconcile`.
@@ -1541,7 +1541,7 @@ def preflight(c, vault=None, registry=None):
     # Sensitivity keywords/names are TAGS only, do not park (collect_sensitivity_tags).
     for pat in POLICY["forbidden_patterns"]:
         if re.search(pat, blob):
-            return "review", "forbidden-pattern", "matched forbidden pattern (email/key/ip/money/phone)"
+            return "review", "forbidden-pattern", "matched forbidden pattern (email/key/ip/phone)"
     try:
         age = (datetime.date.today() - datetime.date.fromisoformat(str(c["observed_at"]))).days
         if age > POLICY["max_source_age_days"]:
@@ -2587,20 +2587,9 @@ TEAM_DENY_PRIVATE_DEFAULT = (
     "performance review", "appraisal", "disciplinary",
     "dividend", "corporation tax", "vat return", "hmrc", "tax position",
     "billing dispute")
-# Amounts, prices, rates and invoice numbers never go to team memory (policy choice): every agent reads it.
-_TEAM_MONEY = re.compile(
-    r"[£$€]\s?\d"                                                          # £9,999  £9.9k  $20
-    r"|\d[\d,.]*\s?[kKmM]?\s?(?:\+\s?VAT|plus\s+VAT|ex\.?\s?VAT|inc\.?\s?VAT)\b"  # 1,500 + VAT, 12k plus VAT
-    r"|\b(?:GBP|USD|EUR)\s?\d|\d[\d,.]*\s?(?:GBP|USD|EUR|pounds?|quid)\b"   # 175 GBP, 2750 pounds
-    r"|\b(?:rate|fee|fees|charge|cost|price|retainer)\s+(?:is|of|at|was|=|:)\s*\d{2,}"  # day rate is 620, rate of 65
-    r"|\bpriced\s+at\s+\d"                                                  # priced at 5,500
-    r"|\d{1,3}(?:,\d{3})+\s?(?:pm|pcm|p\.m\.|/mo|/month|per\s+month|a\s+month)\b"  # 3,100pm (not 3pm)
-    r"|\d+(?:\.\d+)?\s?k\s?(?:a|per|/)\s?(?:month|mo|year|yr|day|hour)\b"  # 2.5k a month
-    r"|\d{2,}\s?(?:ph|p/h|p/d|pcm)\b"                                       # 65ph, 620 p/d
-    r"|\d{2,}\s?/\s?hr\b"                                                     # 37/hr (not 20/hour)
-    r"|\binvoice\s+(?:no\.?\s*|number\s*|#\s*)?\d{3,}"                      # invoice 0009981
-    r"|REDACTED:money",
-    re.I)
+# Client fees, quotes, job values and payment terms belong in team memory.
+# James, 2026-11-09: "yes we need money showing", reversing the 2026-10-14 amount ban.
+# Private finance remains denied by TEAM_DENY_PRIVATE_DEFAULT above.
 _TEAM_SEEN_FACTS = set()  # in-process: fact hashes submitted by this run
 
 
@@ -2694,8 +2683,6 @@ def team_route(c, src, scope):
         denied = _team_denied_term(f"{fact}\n{excerpt}", reg)
         if denied:
             return {"status": "skipped", "detail": f"denied: {denied[0]} {denied[1]}"}
-        if _TEAM_MONEY.search(f"{fact}\n{excerpt}"):
-            return {"status": "skipped", "detail": "denied: private amount"}
         fact_hash = hashlib.sha256(_team_norm_text(fact).encode("utf-8")).hexdigest()
         if fact_hash in _TEAM_SEEN_FACTS or fact_hash in _team_submitted_hashes():
             return {"status": "skipped", "detail": "duplicate of earlier submission (own history)",

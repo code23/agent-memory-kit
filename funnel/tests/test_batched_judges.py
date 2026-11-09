@@ -481,13 +481,16 @@ def main():
                  "Contract work at 620 p/d.", "It came to 2750 pounds.", "Hosting is 3,100 pcm.", "The work was priced at 5,500."):
         reset()
         out, _ = route(cand(scope="org", ctype="decision", fact=fact), team_run)
-        check(f"deny amount: {fact[:30]}", out["status"] == "skipped"
-              and out["detail"] in ("denied: private amount", "not eligible (scope/sensitivity/type)")
-              and not calls and not searches, str(out))
+        check(f"client amount allowed unless sensitive: {fact[:30]}",
+              (out["status"] == "submitted" and len(calls) == 1
+               and calls[0][calls[0].index("--body") + 1].startswith(fact))
+              or (out["status"] == "skipped" and out["detail"] == "not eligible (scope/sensitivity/type)"), str(out))
     reset()
     out, _ = route(cand(scope="org", ctype="decision", fact="Backups run on Sunday."), team_run,
                    excerpt="Agreed at \u00a3640 plus VAT on the call.")
-    check("deny amount in excerpt too", out["status"] == "skipped" and out["detail"] == "denied: private amount" and not calls, str(out))
+    check("client amount in excerpt retained", out["status"] == "submitted" and len(calls) == 1
+          and "Agreed at " in calls[0][calls[0].index("--body") + 1]
+          and "[REDACTED:money]" not in calls[0][calls[0].index("--body") + 1], str(out))
     for fact in ("The estimator prices from a partial postcode such as ZZ99.", "The pilot covers 20 to 60 widgets.",
                  "The payment split is 50/25/25.", "Four maintenance hours a month are included.",
                  "The standup is a 3pm meeting.", "Calls run 1pm-3pm, sometimes until 10pm.", "We post 5 per day and 3 per month.",

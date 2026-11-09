@@ -156,13 +156,12 @@ _SECRET_PATTERNS = [
     r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
     r"\bs[k]-[A-Za-z0-9]{8,}",
     r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
-    r"[£$€]\s?\d",
     r"\b\+?\d[\d ]{8,}\d\b",
     r"(github|gitlab)\.com/",
     r"export [A-Z_]{4,}",
     r":\d{4,5}\b",
 ]
-_SECRET_KINDS = ["email", "api_key", "ipv4", "money", "phone", "repo_url", "env_export", "port"]
+_SECRET_KINDS = ["email", "api_key", "ipv4", "phone", "repo_url", "env_export", "port"]
 
 
 

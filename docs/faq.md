@@ -60,8 +60,11 @@ also valid: a person writes the fact and commits it.
 
 ## 8. What about GDPR and client data?
 
+Client fees, quotes, job values and payment terms can be shared in team memory. Private
+finance, including salary, payroll, dividends and tax affairs, stays out.
+
 The design helps, but it does not make you compliant on its own. Keep personal data out of
-memory: the checks match emails, phone numbers and money figures with regular expressions,
+memory: the checks match emails and phone numbers with regular expressions,
 and the instructions tell agents never to propose personal data or transcripts. Those
 patterns are a safety net, not a guarantee, and they will miss personal data in formats
 they do not know. Store how you work with a client, not the client's records. Keep one
