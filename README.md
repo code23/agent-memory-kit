@@ -1,6 +1,6 @@
 # Agent memory kit
 
-The self-hosted Mac service is being prepared on the release-candidate branch. Its [Mac setup walkthrough](docs/mac-setup.md) covers the candidate installer; [installer acceptance](docs/installer-testing.md) defines the tests and report required before client use. [SOURCE.md](SOURCE.md) records the packaged runtime's source and licenses. The existing three-model YOLO workflow remains intact. The file-vault kit below remains the current reference implementation until the new installation path passes acceptance.
+The self-hosted Mac service installer is merged as a candidate and is not yet approved for client use (no go until the two-account rehearsal passes). Its [Mac setup walkthrough](docs/mac-setup.md) covers the candidate installer; [installer acceptance](docs/installer-testing.md) defines the tests and report required before client use. [SOURCE.md](SOURCE.md) records the packaged runtime's source and licenses. The existing three-model YOLO workflow remains intact. The file-vault kit below remains the current reference implementation until the new installation path passes acceptance.
 
 A reference kit for the way I give AI agents a shared, trusted memory. It is not a product.
 It is the scripts, policy, templates and documents I use, cleaned up so you can read them,
